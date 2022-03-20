@@ -1,6 +1,7 @@
 use core::fmt;
 
 mod mem;
+mod cpu;
 
 #[derive(Debug)]
 pub enum Mirroring {
