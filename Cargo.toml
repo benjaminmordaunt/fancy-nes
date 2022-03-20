@@ -1,0 +1,15 @@
+[workspace]
+members = [
+    "nes",
+]
+
+[profile.dev]
+opt-level = 3
+debug = true
+debug-assertions = true
+overflow-checks = true
+lto = false
+panic = "unwind"
+incremental = true
+codegen-units = 256
+rpath = false
