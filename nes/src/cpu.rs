@@ -53,9 +53,12 @@ impl Cpu {
 
         /* Execute stage */
         match instr.mnemonic {
+            "ADC" => self.A = self.op_arithmetic(&instr.mode, true),
+            "AND" => self.A = self.op_bitwise(&instr.mode, |x, y| { x & y }),
             "LDA" => self.A = self.op_load(&instr.mode),
             "LDX" => self.X = self.op_load(&instr.mode),
-            "LDY" => self.Y = self.op_load(&instr.mode)
+            "LDY" => self.Y = self.op_load(&instr.mode),
+            "SBC" => self.A = self.op_arithmetic(&instr.mode, false),
         }
 
         /* Wait a specific # of cycles */
@@ -123,6 +126,31 @@ impl Cpu {
         }
     }
 
+    /* arithmetic operations - ADC, SBC */
+    fn op_arithmetic(&mut self, mode: &AddressingMode, add: bool) -> u8 {
+        let (addr, page_cross) = self.resolve_address(mode);
+        let data = self.memory.read(addr);
+
+        /* Interestingly, a simple one's complement works here, including all flags
+           (exercise for the reader :-) ) */
+        if !add {
+            data = !data;
+        }
+
+        let (result, carry_data) = self.A.overflowing_add(data);
+        let (result, carry_cin) = result.overflowing_add(self.status.contains(StatusRegister::CARRY) as u8);
+
+        self.status.set(StatusRegister::CARRY, carry_data || carry_cin);
+        self.status.set(StatusRegister::ZERO, result == 0);
+        self.status.set(StatusRegister::OVERFLOW, (self.A ^ result) & (data ^ result) & 0x80 != 0);
+        self.status.set(StatusRegister::NEGATIVE, result & 0x80 > 0);
+
+        if page_cross {
+            self.wait_cycles += 1;
+        }
+        result
+    }
+
     /* load operations - LDA, LDX, LDY */
     fn op_load(&mut self, mode: &AddressingMode) -> u8 {
         let (addr, page_cross) = self.resolve_address(mode);
@@ -159,14 +187,15 @@ impl Cpu {
         }
     }
 
-    /* Bitwise operators - ADD, EOR, ORA */
-    fn op_bitwise(&mut self, func: impl Fn(u8, u8) -> u8, mode: &AddressingMode) {
+    /* Bitwise operators - AND, EOR, ORA */
+    fn op_bitwise(&mut self, mode: &AddressingMode, func: impl Fn(u8, u8) -> u8) -> u8 {
         let (addr, page_cross) = self.resolve_address(mode);
         let data = self.memory.read(addr);
 
-        self.A = func(self.A, data);
-        self.status.set(StatusRegister::ZERO, self.A == 0);
-        self.status.set(StatusRegister::NEGATIVE, self.A & 0x80 > 0);
+        let result = func(self.A, data);
+        self.status.set(StatusRegister::ZERO, result == 0);
+        self.status.set(StatusRegister::NEGATIVE, result & 0x80 > 0);
+        result
     }
 
     /* Register transfers - TAX, TXA, TAY, TYA, TSX, TXS */
