@@ -4,15 +4,23 @@ use self::decode::LUT_6502;
 
 mod decode;
 
+/* The BREAK flag(s) is only applicable when the
+   status register is pushed to the stack. 
+   Programs can query BREAK_LOW to determine whether
+   they are in a soft (BRK,"PHP") or hard (IRQ,NMI)
+   interrupt. Though, it's not particularly useful
+   because an NMI can fire during BRK vector routine
+   (not emulated). BREAK_HIGH is always 1. */
 bitflags! {
     struct StatusRegister: u8 {
         const CARRY             = 0b00000001;
         const ZERO              = 0b00000010;
         const INTERRUPT_DISABLE = 0b00000100;
         const DECIMAL_MODE      = 0b00001000;
-        const BREAK_COMMAND     = 0b00010000;
-        const OVERFLOW          = 0b00100000;
-        const NEGATIVE          = 0b01000000;
+        const BREAK_LOW         = 0b00010000; /* see above */
+        const BREAK_HIGH        = 0b00100000; /* see above */
+        const OVERFLOW          = 0b01000000;
+        const NEGATIVE          = 0b10000000;
     }
 }
 
@@ -337,5 +345,27 @@ impl Cpu {
             self.status.set(StatusRegister::NEGATIVE, result & 0x80 > 0);
             return result;
         }
+    }
+
+    /* The NES's reset signal handling */
+    fn reset(&mut self) {
+        self.status.insert(StatusRegister::INTERRUPT_DISABLE);
+        self.status.insert(StatusRegister::BREAK_HIGH); /* always 1 */
+        self.PC = self.memory.read(0xFFFC) as u16 +
+                (self.memory.read(0xFFFD) as u16) << 8;
+    }
+
+    /* Handle the NMI (non-maskable interrupt) - called primarily by the PPU */
+    fn nmi(&mut self) {
+        self.memory.write(self.SP as u16 + 0x0100, (self.PC >> 8) as u8); /* PC, MSB */
+        self.SP -= 1;
+        self.memory.write(self.SP as u16 + 0x0100, self.PC as u8); /* PC, LSB */
+        self.SP -= 1;
+        self.status.remove(StatusRegister::BREAK_LOW); /* NMI is a hard interrupt */
+        self.memory.write(self.SP as u16 + 0x0100, self.status.bits()); /* Status */
+        self.SP -= 1;
+        self.status.set(StatusRegister::INTERRUPT_DISABLE, true);
+        self.PC = self.memory.read(0xFFEA) as u16 +
+                (self.memory.read(0xFFEB) as u16) << 8;
     }
 }
