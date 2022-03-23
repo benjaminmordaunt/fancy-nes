@@ -5,7 +5,7 @@ use self::decode::LUT_6502;
 mod decode;
 
 bitflags! {
-    struct StatusRegister: u32 {
+    struct StatusRegister: u8 {
         const CARRY             = 0b00000001;
         const ZERO              = 0b00000010;
         const INTERRUPT_DISABLE = 0b00000100;
@@ -55,10 +55,59 @@ impl Cpu {
         match instr.mnemonic {
             "ADC" => self.A = self.op_arithmetic(&instr.mode, true),
             "AND" => self.A = self.op_bitwise(&instr.mode, |x, y| { x & y }),
+            "ASL" => self.op_rotate(&instr.mode, true, true),
+            "BCC" => self.op_branch(StatusRegister::CARRY, false, &instr.mode),
+            "BCS" => self.op_branch(StatusRegister::CARRY, true, &instr.mode),
+            "BEQ" => self.op_branch(StatusRegister::ZERO, true, &instr.mode),
+            "BIT" => self.op_bit(&instr.mode),
+            "BMI" => self.op_branch(StatusRegister::NEGATIVE, true, &instr.mode),
+            "BNE" => self.op_branch(StatusRegister::ZERO, false, &instr.mode),
+            "BPL" => self.op_branch(StatusRegister::NEGATIVE, false, &instr.mode),
+            "BRK" => unimplemented!(),
+            "BVC" => self.op_branch(StatusRegister::OVERFLOW, false, &instr.mode),
+            "BVS" => self.op_branch(StatusRegister::OVERFLOW, true, &instr.mode),
+            "CLC" => self.status.set(StatusRegister::CARRY, false),
+            "CLD" => self.status.set(StatusRegister::DECIMAL_MODE, false),
+            "CLI" => self.status.set(StatusRegister::INTERRUPT_DISABLE, false),
+            "CLV" => self.status.set(StatusRegister::OVERFLOW, false),
+            "CMP" => self.op_compare(self.A, &instr.mode),
+            "CPX" => self.op_compare(self.X, &instr.mode),
+            "CPY" => self.op_compare(self.Y, &instr.mode),
+            "DEC" => self.A = self.op_incdec(self.A, false),
+            "DEX" => self.X = self.op_incdec(self.X, false),
+            "DEY" => self.Y = self.op_incdec(self.Y, false),
+            "EOR" => self.A = self.op_bitwise(&instr.mode, |x, y| { x ^ y }),
+            "INC" => self.A = self.op_incdec(self.A, true),
+            "INX" => self.X = self.op_incdec(self.X, true),
+            "INY" => self.Y = self.op_incdec(self.Y, true),
+            "JMP" => self.op_jump(&instr.mode),
+            "JSR" => unimplemented!(),
             "LDA" => self.A = self.op_load(&instr.mode),
             "LDX" => self.X = self.op_load(&instr.mode),
             "LDY" => self.Y = self.op_load(&instr.mode),
+            "LSR" => self.op_rotate(&instr.mode, false, true),
+            "NOP" => {},
+            "ORA" => self.A = self.op_bitwise(&instr.mode, |x, y| { x | y }),
+            "PHA" => self.op_stack_push(false),
+            "PHP" => self.op_stack_push(true),
+            "PLA" => self.A = self.op_stack_pull(false),
+            "PLP" => self.status = StatusRegister::from_bits_truncate(self.op_stack_pull(true)),
+            "ROL" => self.op_rotate(&instr.mode, true, false),
+            "ROR" => self.op_rotate(&instr.mode, false, false),
+            "RTI" => unimplemented!(),
+            "RTS" => unimplemented!(),
             "SBC" => self.A = self.op_arithmetic(&instr.mode, false),
+            "SEC" => self.status.set(StatusRegister::CARRY, true),
+            "SED" => self.status.set(StatusRegister::DECIMAL_MODE, true),
+            "SEI" => self.status.set(StatusRegister::INTERRUPT_DISABLE, true),
+            "STA" => self.op_store(self.A, &instr.mode),
+            "STX" => self.op_store(self.X, &instr.mode),
+            "STY" => self.op_store(self.Y, &instr.mode),
+            "TAX" => self.X = self.op_transfer_a(self.A, false),
+            "TAY" => self.Y = self.op_transfer_a(self.A, false),
+            "TSX" => self.X = self.op_transfer_a(self.SP, false),
+            "TXS" => self.SP = self.op_transfer_a(self.X, true),
+            "TYA" => self.A = self.op_transfer_a(self.Y, false),
         }
 
         /* Wait a specific # of cycles */
@@ -176,6 +225,16 @@ impl Cpu {
         self.PC = addr;
     }
 
+    /* bit test */
+    fn op_bit(&mut self, mode: &AddressingMode) {
+        let addr = self.resolve_address(mode).0;
+        let data = self.memory.read(addr);
+
+        self.status.set(StatusRegister::ZERO, self.A & data == 0);
+        self.status.set(StatusRegister::OVERFLOW, data & 0x40 > 0);
+        self.status.set(StatusRegister::NEGATIVE, data & 0x80 > 0);
+    }
+
     /* conditional branch operations - BMI, BEQ, BNE, BPL, BVC, BVS */
     fn op_branch(&mut self, reg: StatusRegister, set: bool, mode: &AddressingMode) {
         if self.status.contains(reg) == set {
@@ -196,6 +255,44 @@ impl Cpu {
         self.status.set(StatusRegister::ZERO, result == 0);
         self.status.set(StatusRegister::NEGATIVE, result & 0x80 > 0);
         result
+    }
+
+    /* Increment/decrement operators - INC, INX, INY, DEC, DEX, DEY */
+    fn op_incdec(&mut self, data: u8, inc: bool) -> u8 {
+        let result = if inc { data + 1 } else { data - 1 };
+        self.status.set(StatusRegister::ZERO, result == 0);
+        self.status.set(StatusRegister::NEGATIVE, result & 0x80 > 0);
+        result
+    }
+
+    /* Rotate operators - ROL, ROR */
+    fn op_rotate(&mut self, mode: &AddressingMode, left: bool, arith: bool) {
+        let addr = self.resolve_address(mode).0;
+
+        let data = if matches!(mode, AddressingMode::Accumulator) {
+            self.A
+        } else {
+            self.memory.read(addr)
+        };
+
+        let old_carry = self.status.contains(StatusRegister::CARRY) as u8;
+        if left {
+            self.status.set(StatusRegister::CARRY, data & 0x80 > 0);
+            data = data.rotate_left(1);
+            data = (data & 0b11111110) | (if arith { 0 } else { old_carry }); 
+            self.status.set(StatusRegister::NEGATIVE, data & 0x80 > 0);
+        } else {
+            self.status.set(StatusRegister::CARRY, data & 0x1 > 0);
+            data = data.rotate_right(1);
+            data = (data & 0b01111111) | (if arith { 0 } else {old_carry << 7});
+            self.status.set(StatusRegister::NEGATIVE, data * 0x80 > 0);
+        }
+
+        if matches!(mode, AddressingMode::Accumulator) {
+            self.A = data;
+        } else {
+            self.memory.write(addr, data);
+        }
     }
 
     /* Register transfers - TAX, TXA, TAY, TYA, TSX, TXS */
@@ -220,21 +317,25 @@ impl Cpu {
         }
     }
 
-    /* Set/clear interrupt disable flag - SEI, CLI */
-    fn op_interrupt_disable(&mut self, set: bool) {
-        self.status.set(StatusRegister::INTERRUPT_DISABLE, set);
+    /* Stack operations - PHA, PHP, PLA, PLP */
+    fn op_stack_push(&mut self, status: bool) {
+        if status {
+            self.memory.write(self.SP, self.status.bits());
+        } else {
+            self.memory.write(self.SP, self.A);
+        }
+        self.SP -= 1;
     }
 
-    /* Set/clear decimal mode flag - SED, CLD */
-    fn op_decimal_mode(&mut self, set: bool) {
-        /* Some (Famicom) games require decimal mode: Duck Maze (original Bit Corp. ed.)
-           and Othello. These are very naughty boys and decimal mode is not supported. */
-        unimplemented!()
+    fn op_stack_pull(&mut self, status: bool) -> u8 {
+        self.SP -= 1;
+        if status {
+            return self.memory.read(self.SP);
+        } else {
+            let result = self.memory.read(self.SP);
+            self.status.set(StatusRegister::ZERO, result == 0);
+            self.status.set(StatusRegister::NEGATIVE, result & 0x80 > 0);
+            return result;
+        }
     }
-
-    /* Clear overflow flag - CLV */
-    fn op_overflow(&mut self) {
-        self.status.set(StatusRegister::OVERFLOW, false);
-    }
-
 }
