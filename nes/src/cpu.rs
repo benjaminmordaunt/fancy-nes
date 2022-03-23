@@ -320,9 +320,9 @@ impl Cpu {
     /* Stack operations - PHA, PHP, PLA, PLP */
     fn op_stack_push(&mut self, status: bool) {
         if status {
-            self.memory.write(self.SP, self.status.bits());
+            self.memory.write(self.SP as u16 + 0x0100, self.status.bits());
         } else {
-            self.memory.write(self.SP, self.A);
+            self.memory.write(self.SP as u16 + 0x0100, self.A);
         }
         self.SP -= 1;
     }
@@ -330,9 +330,9 @@ impl Cpu {
     fn op_stack_pull(&mut self, status: bool) -> u8 {
         self.SP -= 1;
         if status {
-            return self.memory.read(self.SP);
+            return self.memory.read(self.SP as u16 + 0x0100);
         } else {
-            let result = self.memory.read(self.SP);
+            let result = self.memory.read(self.SP as u16 + 0x0100);
             self.status.set(StatusRegister::ZERO, result == 0);
             self.status.set(StatusRegister::NEGATIVE, result & 0x80 > 0);
             return result;
