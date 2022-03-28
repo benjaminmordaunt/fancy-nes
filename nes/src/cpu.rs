@@ -1,8 +1,15 @@
 use bitflags::bitflags;
 
 use self::decode::LUT_6502;
+use self::mem::*;
 
 mod decode;
+mod debug;
+mod mem;
+
+// Mappers
+mod mapper;
+mod mapper000;
 
 /* The BREAK flag(s) is only applicable when the
    status register is pushed to the stack. 
@@ -51,13 +58,15 @@ struct Cpu {
     /* instructions */
     target_address: u16,  /* "address" dumped straight from operand */
     wait_cycles: u8,      /* pending wait cycles */
+
+    memory: CPUMemory,
 }
 
 impl Cpu {
     fn do_op(&mut self) {
         /* Fetch stage */
         let op = self.memory.read(self.PC);
-        let instr = LUT_6502[op];
+        let instr = LUT_6502[&op];
 
         /* Execute stage */
         match instr.mnemonic {
@@ -117,18 +126,6 @@ impl Cpu {
             "TXS" => self.SP = self.op_transfer_a(self.X, true),
             "TYA" => self.A = self.op_transfer_a(self.Y, false),
         }
-
-        /* Wait a specific # of cycles */
-        while instr.cycles > 0 {
-            self.spin();
-            instr.cycles -= 1;
-        }
-    
-        /* Wait more cycles depending on instruction execution */
-        while self.wait_cycles > 0 {
-            self.spin();
-            instr.cycles -= 1;
-        }
     }
 
     /* resolve the address presented in the operand in
@@ -174,10 +171,10 @@ impl Cpu {
             }
             AddressingMode::IndexedIndirect => {
                 let zp_addr: u16 = (self.target_address as u8 + self.X) as u16;
-                return (self.memory.read(zp_addr), false);
+                return (self.memory.read_16(zp_addr), false);
             }
             AddressingMode::IndirectIndexed => {
-                return (self.memory.read(self.target_address) + self.Y as u16, false);
+                return (self.memory.read_16(self.target_address) + self.Y as u16, false);
             }
             _ => unimplemented!()
         }
@@ -223,7 +220,7 @@ impl Cpu {
     /* store operations - STA, STX, STY */
     fn op_store(&mut self, data: u8, mode: &AddressingMode) {
         let (addr, _) = self.resolve_address(mode);
-        self.memory.write(data);
+        self.memory.write(addr, data);
     }
 
     /* jump operations - JMP, JSR, RTI, RTS */
