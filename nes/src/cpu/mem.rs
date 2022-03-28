@@ -1,7 +1,4 @@
 use super::mapper::Mapper;
-struct PPURegisters {
-    
-}
 
 type IORegisters = [u8; 0x0018];
     /* SQ1_VOL */
@@ -30,14 +27,14 @@ type IORegisters = [u8; 0x0018];
     /* JOY2 */
 
 pub struct CPUMemory {
-    internal_ram: [u8; 0x0800],
-    ppu_registers: [u8; 0x0008],
-    io_registers: IORegisters,
-    cartridge_mapper: dyn Mapper,
+    pub internal_ram: [u8; 0x0800],
+    pub ppu_registers: [u8; 0x0008],
+    pub io_registers: IORegisters,
+    pub cartridge_mapper: Box<dyn Mapper>,
 }
 
 impl CPUMemory {
-    pub fn read(&self, addr: u16) -> u8 {
+    pub fn read(&mut self, addr: u16) -> u8 {
         /* Internal RAM */
         if (addr & 0xF000) < 0x2000 {
             return self.internal_ram[(addr & 0x07FF) as usize];
@@ -66,12 +63,12 @@ impl CPUMemory {
         unimplemented!();
     }
 
-    pub fn read_16(&self, addr: u16) -> u16 {
+    pub fn read_16(&mut self, addr: u16) -> u16 {
         self.read(addr) as u16
         + (self.read(addr + 1) as u16) << 8
     }
 
-    pub fn write(&self, addr: u16, data: u8) {
+    pub fn write(&mut self, addr: u16, data: u8) {
         todo!();
     }
 }

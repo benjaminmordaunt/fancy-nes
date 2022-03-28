@@ -1,10 +1,13 @@
+use std::cell::RefCell;
+
 use bitflags::bitflags;
 
 use self::decode::LUT_6502;
+use self::mapper000::Mapper000;
 use self::mem::*;
 
-mod decode;
-mod debug;
+pub mod decode;
+pub mod debug;
 mod mem;
 
 // Mappers
@@ -31,7 +34,7 @@ bitflags! {
     }
 }
 
-enum AddressingMode {
+pub enum AddressingMode {
     Implied,
     Accumulator,
     Immediate,
@@ -47,9 +50,9 @@ enum AddressingMode {
     IndirectIndexed,
 }
 
-struct Cpu {
+pub struct NESCpu {
     status: StatusRegister,
-    PC: u16,    /* program counter */
+    pub PC: u16,    /* program counter */
     SP: u8,     /* stack pointer */
     A: u8,      /* accumulator */
     X: u8,      /* index register X */
@@ -59,14 +62,40 @@ struct Cpu {
     target_address: u16,  /* "address" dumped straight from operand */
     wait_cycles: u8,      /* pending wait cycles */
 
-    memory: CPUMemory,
+    pub memory: CPUMemory,
 }
 
-impl Cpu {
+impl NESCpu {
+    pub fn new(mapper_id: usize) -> Self {
+        Self {
+            status: StatusRegister::empty(),
+            PC: 0, /* given a correct value from the reset method  */
+            SP: 0, /* given a correct value by the ROM's init code */
+            A: 0,
+            X: 0,
+            Y: 0,
+            target_address: 0,
+            wait_cycles: 0,
+            memory: CPUMemory {
+                internal_ram: [0; 2048],
+                ppu_registers: [0; 8],
+                io_registers: [0; 24],
+                cartridge_mapper: Box::new(
+                    match mapper_id {
+                        0 => {
+                            Mapper000::new()
+                        }
+                        _ => unimplemented!()
+                    }
+                )
+            }
+        }
+    }
+
     fn do_op(&mut self) {
         /* Fetch stage */
         let op = self.memory.read(self.PC);
-        let instr = LUT_6502[&op];
+        let instr = &LUT_6502[&op];
 
         /* Execute stage */
         match instr.mnemonic {
@@ -125,12 +154,13 @@ impl Cpu {
             "TSX" => self.X = self.op_transfer_a(self.SP, false),
             "TXS" => self.SP = self.op_transfer_a(self.X, true),
             "TYA" => self.A = self.op_transfer_a(self.Y, false),
+            _     => unimplemented!()
         }
     }
 
     /* resolve the address presented in the operand in
        accorance with addressing mode rules */
-    fn resolve_address(&self, mode: &AddressingMode) -> (u16, bool) {
+    fn resolve_address(&mut self, mode: &AddressingMode) -> (u16, bool) {
         match mode {
             AddressingMode::ZeroPage => {
                 return (self.target_address & 0xFF, false);
@@ -183,7 +213,7 @@ impl Cpu {
     /* arithmetic operations - ADC, SBC */
     fn op_arithmetic(&mut self, mode: &AddressingMode, add: bool) -> u8 {
         let (addr, page_cross) = self.resolve_address(mode);
-        let data = self.memory.read(addr);
+        let mut data = self.memory.read(addr);
 
         /* Interestingly, a simple one's complement works here, including all flags
            (exercise for the reader :-) ) */
@@ -253,7 +283,7 @@ impl Cpu {
 
     /* Bitwise operators - AND, EOR, ORA */
     fn op_bitwise(&mut self, mode: &AddressingMode, func: impl Fn(u8, u8) -> u8) -> u8 {
-        let (addr, page_cross) = self.resolve_address(mode);
+        let (addr, _) = self.resolve_address(mode);
         let data = self.memory.read(addr);
 
         let result = func(self.A, data);
@@ -274,7 +304,7 @@ impl Cpu {
     fn op_rotate(&mut self, mode: &AddressingMode, left: bool, arith: bool) {
         let addr = self.resolve_address(mode).0;
 
-        let data = if matches!(mode, AddressingMode::Accumulator) {
+        let mut data = if matches!(mode, AddressingMode::Accumulator) {
             self.A
         } else {
             self.memory.read(addr)
@@ -345,11 +375,10 @@ impl Cpu {
     }
 
     /* The NES's reset signal handling */
-    fn reset(&mut self) {
+    pub fn reset(&mut self) {
         self.status.insert(StatusRegister::INTERRUPT_DISABLE);
         self.status.insert(StatusRegister::BREAK_HIGH); /* always 1 */
-        self.PC = self.memory.read(0xFFFC) as u16 +
-                (self.memory.read(0xFFFD) as u16) << 8;
+        self.PC = self.memory.read_16(0xFFFC);
     }
 
     /* Handle the NMI (non-maskable interrupt) - called primarily by the PPU */

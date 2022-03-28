@@ -1,6 +1,5 @@
-use core::fmt;
+//use core::fmt;
 
-mod mem;
 mod cpu;
 
 #[derive(Debug)]
@@ -13,9 +12,10 @@ pub enum Mirroring {
 #[derive(Debug)]
 pub struct NESHeaderMetadata {
     pub hardwired_mirroring: Mirroring,
-    mapper_id: u8,
-    prg_rom_size: u32,
-    chr_rom_size: u32,
+    pub mapper_id: u8,
+    pub prg_rom_size: u32,
+    pub chr_rom_size: u32,
+    pub has_trainer: bool,
 }
 
 struct NESHeader {
@@ -33,7 +33,7 @@ struct NESHeader {
 }
 
 impl NESHeaderMetadata {
-    pub fn parse_header(header: Vec<u8>) -> Result<Self, &'static str> {
+    pub fn parse_header(header: &Vec<u8>) -> Result<Self, &'static str> {
        if header[0..=3] != [b'N', b'E', b'S', 0x1A] {
            return Err("Header missing NES<EOF> magic");
        }
@@ -72,23 +72,22 @@ impl NESHeaderMetadata {
        let mapper_id = (nes_header.flags6 & 0b11110000) >> 4
                          | (nes_header.flags7 & 0b11110000);
 
-       if !mem::ADDRESS_MAPPER.contains_key(&mapper_id) {
-            return Err("Mapper unimplemented.");
-       }
-
        /* get the size of the PRG ROM - declared in 16 KB units */
        let prg_rom_size = nes_header.prg_rom as u32 * 16 * 1024;
 
        /* get the size of the CHR ROM - declared in 8 KB units
         * may be 0, in which case only CHR RAM is used.
         */
-        let chr_rom_size = nes_header.chr_rom as u32 * 8 * 1024;
+       let chr_rom_size = nes_header.chr_rom as u32 * 8 * 1024;
+
+       let has_trainer = nes_header.flags6 & 0x4 > 0;
 
        Ok(Self {
            hardwired_mirroring,
            mapper_id,
            prg_rom_size,
-           chr_rom_size
+           chr_rom_size,
+           has_trainer
        })
     }
 }

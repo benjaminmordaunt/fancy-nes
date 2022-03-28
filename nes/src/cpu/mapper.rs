@@ -4,4 +4,6 @@
 pub trait Mapper {
     fn read(&mut self, addr: u16) -> u8;
     fn write(&mut self, addr: u16, data: u8);
+
+    fn load_prg_rom(&mut self, rom: &Vec<u8>);
 }

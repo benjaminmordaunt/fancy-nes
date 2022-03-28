@@ -9,12 +9,12 @@ use super::mapper::Mapper;
 // Most games shouldn't depend on mirrored addresses, so let's
 // hope for the best!
 
-pub struct Mapper000<const PRG_ROM_SIZE: usize> {
-    prg_rom: [u8; PRG_ROM_SIZE],
+pub struct Mapper000 {
+    prg_rom: Vec<u8>,
     prg_ram: [u8; 8192],
 }
 
-impl<const PRG_ROM_SIZE: usize> Mapper for Mapper000<PRG_ROM_SIZE> {
+impl Mapper for Mapper000 {
     fn read(&mut self, addr: u16) -> u8 {
         match addr {
             0x6000..=0x7FFF => {
@@ -24,7 +24,7 @@ impl<const PRG_ROM_SIZE: usize> Mapper for Mapper000<PRG_ROM_SIZE> {
                 return self.prg_rom[addr as usize - 0x8000];
             }
             0xC000..=0xFFFF => {
-                if PRG_ROM_SIZE == 16384 {
+                if self.prg_rom.capacity() == 16384 {
                     return self.prg_rom[addr as usize - 0xC000];
                 } else {
                     return self.prg_rom[addr as usize - 0x8000];
@@ -40,6 +40,25 @@ impl<const PRG_ROM_SIZE: usize> Mapper for Mapper000<PRG_ROM_SIZE> {
                 self.prg_ram[addr as usize - 0x6000] = data;
             }
             _ => {}
+        }
+    }
+
+    fn load_prg_rom(&mut self, rom: &Vec<u8>) {
+        assert!(match rom.capacity() {
+            16384 => true,
+            32768 => true,
+            _ => false
+        });
+
+        self.prg_rom = rom.clone();
+    }
+}
+
+impl Mapper000 {
+    pub fn new() -> Self {
+        Self {
+            prg_rom: Vec::new(),
+            prg_ram: [0; 8192],
         }
     }
 }

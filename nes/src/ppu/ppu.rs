@@ -81,6 +81,8 @@ struct NESPPU {
 
     write_toggle: bool, /* The latch shared by $2005, $2006 to distinguish 
                           between first and second writes. */
+    vblank: bool,       /* We are inside VBLANK */
+    scanline: u16,      /* The next scanline to be rendered (0-261 NTSC) */
     vram_v: u16,        /* Current VRAM address */
     vram_t: u16,        /* Staging area for VRAM address copy */
     vram_x: u16,        /* Fine X scroll (actually 3 bits wide) */
@@ -129,6 +131,17 @@ impl NESPPU {
         match addr {
         PPUSTATUS => {
             self.write_toggle = false;
+        }
+        }
+    }
+    
+    /// Handles rendering behaviour of the PPU from a "high level"
+    /// i.e. depends only on the current scanline (0-261)
+    fn ppu_do_scanline(&mut self) {
+        match self.scanline {
+        // Visible scanlines
+        0..=239 => {
+            
         }
         }
     }
