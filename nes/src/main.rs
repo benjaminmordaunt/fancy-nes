@@ -41,7 +41,7 @@ fn main() {
         println!("ROM has trainer - ignoring.");
         prg_rom_data.copy_from_slice(&nes_rom[528..(528 + nes_rom_header.prg_rom_size as usize)]);
     } else {
-        prg_rom_data = nes_rom[16..(16+nes_rom_header.prg_rom_size as usize)].to_vec();
+        prg_rom_data.copy_from_slice(&nes_rom[16..(16+nes_rom_header.prg_rom_size as usize)]);
     }
 
     cpu.memory.cartridge_mapper.load_prg_rom(&prg_rom_data);
