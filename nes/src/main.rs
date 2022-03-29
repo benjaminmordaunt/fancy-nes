@@ -47,11 +47,10 @@ fn main() {
     cpu.memory.cartridge_mapper.load_prg_rom(&prg_rom_data);
     cpu.reset();
 
-    // Run 10 instructions, then show the disassembly of the instruction at the PC
     for _ in 0..10 {
+        println!("Disassembly of ${:X}: {}", cpu.PC, disasm_6502(cpu.PC, &mut cpu.memory));
         cpu.do_op();
     }
-    println!("Disassembly of ${:X}: {}", cpu.PC, disasm_6502(cpu.PC, &mut cpu.memory));
     
     nes_platform::render_main();
 }

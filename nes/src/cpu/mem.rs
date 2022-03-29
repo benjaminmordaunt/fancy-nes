@@ -69,6 +69,31 @@ impl CPUMemory {
     }
 
     pub fn write(&mut self, addr: u16, data: u8) {
-        todo!();
+        /* Internal RAM */
+        if (addr & 0xF000) < 0x2000 {
+            self.internal_ram[(addr & 0x07FF) as usize] = data;
+        }
+
+        /* PPU control registers */
+        /* TODO - in reality these are PPU mapped and take effect */
+        if (addr & 0xF000) == 0x2000 || (addr & 0xF000) == 0x3000 {
+            self.ppu_registers[(addr & 0x0007) as usize] = data;
+        }
+
+        /* APU and I/O */
+        /* TODO - in reality these are PPU mapped and take effect */
+        if (addr >= 0x4000) && (addr <= 0x4017) {
+            self.io_registers[(addr - 0x4000) as usize] = data;
+        }
+
+        /* CPU test mode registers */
+        if (addr >= 0x4018) && (addr <= 0x401F) {
+            return;
+        }
+
+        /* Any address 0x4020 - 0xFFFF is handled by a mapper */
+        if (addr >= 0x4020) && (addr <= 0xFFFF) {
+            return self.cartridge_mapper.write(addr, data);
+        }
     }
 }

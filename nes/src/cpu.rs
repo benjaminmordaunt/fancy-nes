@@ -2,7 +2,7 @@ use std::cell::RefCell;
 
 use bitflags::bitflags;
 
-use self::decode::LUT_6502;
+use self::decode::{LUT_6502, Instruction};
 use self::mapper000::Mapper000;
 use self::mem::*;
 
@@ -104,7 +104,15 @@ impl NESCpu {
     pub fn do_op(&mut self) {
         /* Fetch stage */
         let op = self.memory.read(self.PC);
-        let instr = &LUT_6502[&op];
+        let instr_opt = LUT_6502.get(&op);
+        let instr: &Instruction;
+
+        if instr_opt.is_none() {
+            println!("No instruction found for opcode ${:X}", op);
+            return;
+        }
+
+        instr = instr_opt.unwrap();
 
         /* Execute stage */
         match instr.mnemonic {
@@ -190,6 +198,9 @@ impl NESCpu {
                 self.target_address = self.memory.read_16(self.PC + 1);
                 self.pc_skip = 3;
             },
+            AddressingMode::Immediate => {
+                self.pc_skip = 2;
+            }
             _ => { self.pc_skip = 1; }
         }
 
@@ -307,15 +318,14 @@ impl NESCpu {
 
     /* conditional branch operations - BMI, BEQ, BNE, BPL, BVC, BVS */
     fn op_branch(&mut self, reg: StatusRegister, set: bool, mode: &AddressingMode) {
+        let (addr, page_cross) = self.resolve_address(mode);
         if self.status.contains(reg) == set {
-            let (addr, page_cross) = self.resolve_address(mode);
             if page_cross {
                 self.wait_cycles += 1;
             }
             self.PC = addr;
-        } else {
-            self.pc_skip = 1;
         }
+        self.pc_skip = 0;
     }
 
     /* Bitwise operators - AND, EOR, ORA */
