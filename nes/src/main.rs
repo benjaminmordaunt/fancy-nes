@@ -36,7 +36,7 @@ fn main() {
     // Load the PRG and CHR roms
     let mut cpu = NESCpu::new(nes_rom_header.mapper_id as usize);
 
-    let mut prg_rom_data: Vec<u8> = Vec::with_capacity(nes_rom_header.prg_rom_size as usize);
+    let mut prg_rom_data = vec![0; nes_rom_header.prg_rom_size as usize];
     if nes_rom_header.has_trainer {
         println!("ROM has trainer - ignoring.");
         prg_rom_data.copy_from_slice(&nes_rom[528..(528 + nes_rom_header.prg_rom_size as usize)]);
@@ -47,8 +47,11 @@ fn main() {
     cpu.memory.cartridge_mapper.load_prg_rom(&prg_rom_data);
     cpu.reset();
 
-    // Show the current value of the Program Counter
-    println!("ROM's reset vector (in PC) after 6502 reset: ${:X}", cpu.PC);
+    // Run 10 instructions, then show the disassembly of the instruction at the PC
+    for _ in 0..10 {
+        cpu.do_op();
+    }
+    println!("Disassembly of ${:X}: {}", cpu.PC, disasm_6502(cpu.PC, &mut cpu.memory));
     
     nes_platform::render_main();
 }

@@ -34,6 +34,13 @@ bitflags! {
     }
 }
 
+enum InterruptType {
+    SUBROUTINE, /* not an interrupt at all */
+    BRK,        /* software interrupt */
+    IRQ,        /* hard interrupt request */
+    NMI,        /* non-maskable interrupt (from PPU) */
+}
+
 pub enum AddressingMode {
     Implied,
     Accumulator,
@@ -61,6 +68,7 @@ pub struct NESCpu {
     /* instructions */
     target_address: u16,  /* "address" dumped straight from operand */
     wait_cycles: u8,      /* pending wait cycles */
+    pc_skip: u16,           /* how many bytes to advance the PC by for a given instr. */
 
     pub memory: CPUMemory,
 }
@@ -76,6 +84,7 @@ impl NESCpu {
             Y: 0,
             target_address: 0,
             wait_cycles: 0,
+            pc_skip: 0,
             memory: CPUMemory {
                 internal_ram: [0; 2048],
                 ppu_registers: [0; 8],
@@ -92,7 +101,7 @@ impl NESCpu {
         }
     }
 
-    fn do_op(&mut self) {
+    pub fn do_op(&mut self) {
         /* Fetch stage */
         let op = self.memory.read(self.PC);
         let instr = &LUT_6502[&op];
@@ -109,7 +118,7 @@ impl NESCpu {
             "BMI" => self.op_branch(StatusRegister::NEGATIVE, true, &instr.mode),
             "BNE" => self.op_branch(StatusRegister::ZERO, false, &instr.mode),
             "BPL" => self.op_branch(StatusRegister::NEGATIVE, false, &instr.mode),
-            "BRK" => unimplemented!(),
+            "BRK" => self.enter_subroutine(&InterruptType::BRK),
             "BVC" => self.op_branch(StatusRegister::OVERFLOW, false, &instr.mode),
             "BVS" => self.op_branch(StatusRegister::OVERFLOW, true, &instr.mode),
             "CLC" => self.status.set(StatusRegister::CARRY, false),
@@ -127,7 +136,7 @@ impl NESCpu {
             "INX" => self.X = self.op_incdec(self.X, true),
             "INY" => self.Y = self.op_incdec(self.Y, true),
             "JMP" => self.op_jump(&instr.mode),
-            "JSR" => unimplemented!(),
+            "JSR" => self.enter_subroutine(&InterruptType::SUBROUTINE),
             "LDA" => self.A = self.op_load(&instr.mode),
             "LDX" => self.X = self.op_load(&instr.mode),
             "LDY" => self.Y = self.op_load(&instr.mode),
@@ -140,12 +149,12 @@ impl NESCpu {
             "PLP" => self.status = StatusRegister::from_bits_truncate(self.op_stack_pull(true)),
             "ROL" => self.op_rotate(&instr.mode, true, false),
             "ROR" => self.op_rotate(&instr.mode, false, false),
-            "RTI" => unimplemented!(),
-            "RTS" => unimplemented!(),
+            "RTI" => self.leave_subroutine(&InterruptType::IRQ),
+            "RTS" => self.leave_subroutine(&InterruptType::SUBROUTINE),
             "SBC" => self.A = self.op_arithmetic(&instr.mode, false),
-            "SEC" => self.status.set(StatusRegister::CARRY, true),
-            "SED" => self.status.set(StatusRegister::DECIMAL_MODE, true),
-            "SEI" => self.status.set(StatusRegister::INTERRUPT_DISABLE, true),
+            "SEC" => { self.status.set(StatusRegister::CARRY, true); self.pc_skip = 1; },
+            "SED" => { self.status.set(StatusRegister::DECIMAL_MODE, true); self.pc_skip = 1; },
+            "SEI" => { self.status.set(StatusRegister::INTERRUPT_DISABLE, true); self.pc_skip = 1; },
             "STA" => self.op_store(self.A, &instr.mode),
             "STX" => self.op_store(self.X, &instr.mode),
             "STY" => self.op_store(self.Y, &instr.mode),
@@ -156,12 +165,38 @@ impl NESCpu {
             "TYA" => self.A = self.op_transfer_a(self.Y, false),
             _     => unimplemented!()
         }
+        
+        self.PC += self.pc_skip;
     }
 
     /* resolve the address presented in the operand in
        accorance with addressing mode rules */
     fn resolve_address(&mut self, mode: &AddressingMode) -> (u16, bool) {
+
+        /* Set the target_address based on the command length */
         match mode {
+            AddressingMode::ZeroPage |
+            AddressingMode::ZeroPageX |
+            AddressingMode::ZeroPageY |
+            AddressingMode::IndirectIndexed |
+            AddressingMode::IndexedIndirect => {
+                self.target_address = self.memory.read(self.PC + 1) as u16;
+                self.pc_skip = 2;
+            },
+            AddressingMode::Absolute |
+            AddressingMode::AbsoluteX |
+            AddressingMode::AbsoluteY |
+            AddressingMode::Indirect => {
+                self.target_address = self.memory.read_16(self.PC + 1);
+                self.pc_skip = 3;
+            },
+            _ => { self.pc_skip = 1; }
+        }
+
+        match mode {
+            AddressingMode::Immediate => {
+                return (self.PC + 1, false);
+            },
             AddressingMode::ZeroPage => {
                 return (self.target_address & 0xFF, false);
             },
@@ -278,6 +313,8 @@ impl NESCpu {
                 self.wait_cycles += 1;
             }
             self.PC = addr;
+        } else {
+            self.pc_skip = 1;
         }
     }
 
@@ -297,6 +334,8 @@ impl NESCpu {
         let result = if inc { data + 1 } else { data - 1 };
         self.status.set(StatusRegister::ZERO, result == 0);
         self.status.set(StatusRegister::NEGATIVE, result & 0x80 > 0);
+
+        self.pc_skip = 1;
         result
     }
 
@@ -336,6 +375,8 @@ impl NESCpu {
             self.status.set(StatusRegister::ZERO, self.A == 0);
             self.status.set(StatusRegister::NEGATIVE, self.A & 0b10000000 > 0);
         }
+
+        self.pc_skip = 1;
         from
     }
 
@@ -360,10 +401,12 @@ impl NESCpu {
             self.memory.write(self.SP as u16 + 0x0100, self.A);
         }
         self.SP -= 1;
+        self.pc_skip = 1;
     }
 
     fn op_stack_pull(&mut self, status: bool) -> u8 {
         self.SP -= 1;
+        self.pc_skip = 1;
         if status {
             return self.memory.read(self.SP as u16 + 0x0100);
         } else {
@@ -372,6 +415,82 @@ impl NESCpu {
             self.status.set(StatusRegister::NEGATIVE, result & 0x80 > 0);
             return result;
         }
+    }
+
+    /* branch to interrupt or subroutine */
+    fn enter_subroutine(&mut self, inttype: &InterruptType) {
+        
+        /* if we've ended up here to do an IRQ service when
+           interrupt disable is set, do nothing */
+        if matches!(inttype, InterruptType::IRQ) && self.status.contains(StatusRegister::INTERRUPT_DISABLE) {
+            return;
+        }
+
+        /* if a software BRK has been called, allow for single
+           byte patching by setting the stacked address to the one subsequent */
+        if matches!(inttype, InterruptType::BRK) {
+            self.PC += 1;
+        }
+
+        self.memory.write(self.SP as u16 + 0x0100, (self.PC >> 8) as u8); /* PC, MSB */
+        self.SP -= 1;
+        self.memory.write(self.SP as u16 + 0x0100, self.PC as u8); /* PC, LSB */
+        self.SP -= 1;
+        match inttype {
+            InterruptType::SUBROUTINE => {
+                self.PC = self.memory.read_16(self.PC + 1);
+            },
+            InterruptType::BRK => {
+                self.status.insert(StatusRegister::BREAK_LOW);
+                self.memory.write(self.SP as u16 + 0x0100, self.status.bits());
+                self.status.insert(StatusRegister::INTERRUPT_DISABLE);
+                self.SP -= 1;
+                self.PC = self.memory.read_16(0xFFFA);
+            },
+            InterruptType::IRQ => {
+                self.status.remove(StatusRegister::BREAK_LOW);
+                self.memory.write(self.SP as u16 + 0x0100, self.status.bits());
+                self.status.insert(StatusRegister::INTERRUPT_DISABLE);
+                self.SP -= 1;
+                self.PC = self.memory.read_16(0xFFFE);
+            },
+            InterruptType::NMI => {
+                self.status.remove(StatusRegister::BREAK_LOW);
+                self.memory.write(self.SP as u16 + 0x0100, self.status.bits());
+                self.status.insert(StatusRegister::INTERRUPT_DISABLE);
+                self.SP -= 1;
+                self.PC = self.memory.read_16(0xFFFA);
+            }
+        }
+
+        self.pc_skip = 0;
+    }
+
+    /* return from a subroutine or interrupt */
+    fn leave_subroutine(&mut self, inttype: &InterruptType) {
+        let mut pc: u16 = 0;
+
+        match inttype {
+            InterruptType::IRQ
+            | InterruptType::BRK
+            | InterruptType::NMI => {
+                self.SP += 1;
+                self.status = StatusRegister::from_bits_truncate(self.memory.read(self.SP as u16 + 0x0100));
+                self.status.remove(StatusRegister::INTERRUPT_DISABLE);
+            }
+            _ => {}
+        }
+
+        self.SP += 1;
+        pc |= self.memory.read(self.SP as u16 + 0x0100) as u16;
+        self.SP += 1;
+        pc |= (self.memory.read(self.SP as u16 + 0x0100) as u16) << 8;
+
+        /* Actually start at the next instruction */
+        pc += 1;
+        self.PC = pc;
+
+        self.pc_skip = 0;
     }
 
     /* The NES's reset signal handling */

@@ -1,10 +1,32 @@
+use crate::cpu::decode::LUT_6502;
+
 /// Provide the facilities necessary for the nes-platform
 /// crate to generate a disasm view of the current NES PRG.
 
-use super::{decode::Instruction, AddressingMode};
+use super::{AddressingMode, mem::CPUMemory};
 
-pub fn disasm_6502(instr: &Instruction, operand: u16) -> String {
+pub fn disasm_6502(instruction_addr: u16, mem: &mut CPUMemory ) -> String {
     use AddressingMode::*;
+
+    let instr = &LUT_6502[&mem.read(instruction_addr)];
+    let operand: u16;
+
+    match instr.mode {
+        AddressingMode::ZeroPage |
+        AddressingMode::ZeroPageX |
+        AddressingMode::ZeroPageY |
+        AddressingMode::IndirectIndexed |
+        AddressingMode::IndexedIndirect => {
+            operand = mem.read(instruction_addr + 1) as u16;
+        },
+        AddressingMode::Absolute |
+        AddressingMode::AbsoluteX |
+        AddressingMode::AbsoluteY |
+        AddressingMode::Indirect => {
+            operand = mem.read_16(instruction_addr + 1);
+        },
+        _ => { operand = 0xDEAD; }
+    }
     let disasm: String;
 
     match instr.mode {
