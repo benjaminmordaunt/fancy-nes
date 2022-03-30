@@ -187,7 +187,8 @@ impl NESCpu {
             AddressingMode::ZeroPageX |
             AddressingMode::ZeroPageY |
             AddressingMode::IndirectIndexed |
-            AddressingMode::IndexedIndirect => {
+            AddressingMode::IndexedIndirect |
+            AddressingMode::Relative => {
                 self.target_address = self.memory.read(self.PC + 1) as u16;
                 self.pc_skip = 2;
             },
@@ -325,7 +326,6 @@ impl NESCpu {
             }
             self.PC = addr;
         }
-        self.pc_skip = 0;
     }
 
     /* Bitwise operators - AND, EOR, ORA */
