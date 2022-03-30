@@ -20,7 +20,7 @@ limitations under the License.
 The emulator currently has (mostly working) 6502 emulation and work is
 ongoing to implement the PPU to produce graphics.
 
-Below is an example of the disassembly of the first 10 instructions run
+Below is an example of the disassembly of the first 26 instructions run
 in the emulated CPU after the reset vector for Super Mario Bros. (E).
 
-![Super Mario Bros disasm](media/disasm_super_mario_bros.png)
+![Super Mario Bros disasm](media/6502_disasm.gif)

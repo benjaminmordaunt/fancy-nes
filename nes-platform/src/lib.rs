@@ -8,6 +8,9 @@ use sdl2::render::TextureQuery;
 use std::time::Duration;
 
 pub fn render_main() {
+    let mut disasm_strings = ["TEST", "APPLE"].iter().map(|s| s.to_string()).collect::<Vec<String>>();
+    let mut disasm_sel: usize = 0;
+
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
     let ttf_context = sdl2::ttf::init().map_err(|e| e.to_string()).unwrap();
@@ -20,32 +23,19 @@ pub fn render_main() {
     let mut canvas = window.into_canvas().build().unwrap();
     let texture_creator = canvas.texture_creator();
 
-    let mut font = ttf_context.load_font("debug.ttf", 18).unwrap();
+    let font = ttf_context.load_font("debug.ttf", 22).unwrap();
 
-    let surface = font
-        .render("N V - B D I Z C")
-        .blended(Color::RGBA(255, 255, 255, 255))
-        .map_err(|e| e.to_string()).unwrap();
-
-    font.set_style(sdl2::ttf::FontStyle::BOLD);
-
-    let texture = texture_creator
-        .create_texture_from_surface(&surface)
-        .map_err(|e| e.to_string()).unwrap();
-
-    canvas.set_draw_color(Color::RGBA(195, 217, 255, 255));
-    canvas.clear();
-
-    let TextureQuery { width, height, .. } = texture.query();
-
-    let text_rect = Rect::new(256*2+10, 10, width, height);
-
-    canvas.set_draw_color(Color::RGBA(0, 0, 255, 180));
-    canvas.fill_rect(Rect::new(256*2, 0, 180, 240*2)).unwrap();
-
-    canvas.copy(&texture, None, Some(text_rect)).unwrap();
-    canvas.present();
     let mut event_pump = sdl_context.event_pump().unwrap();
+
+    disasm_strings.iter_mut().enumerate()
+            .for_each(|i| {
+                if i.0 == disasm_sel {
+                    *i.1 = "> ".to_owned() + i.1;
+                } else {
+                    *i.1 = "  ".to_owned() + i.1;
+                }
+             });
+
     'running: loop {
         for event in event_pump.poll_iter() {
             match event {
@@ -56,5 +46,25 @@ pub fn render_main() {
                 _ => {}
             }
         }
+
+        let surface = font
+            .render(disasm_strings.join("\n").as_str())
+            .blended_wrapped(Color::RGBA(255, 255, 255, 255), 160)
+            .map_err(|e| e.to_string()).unwrap();
+
+        let texture = texture_creator
+            .create_texture_from_surface(&surface)
+            .map_err(|e| e.to_string()).unwrap();
+
+        let TextureQuery { width, height, .. } = texture.query();
+
+        let text_rect = Rect::new(256*2+10, 10, width, height);
+
+        canvas.clear();
+        canvas.set_draw_color(Color::RGBA(0, 0, 255, 180));
+        canvas.fill_rect(Rect::new(256*2, 0, 180, 240*2)).unwrap();
+
+        canvas.copy(&texture, None, Some(text_rect)).unwrap();
+        canvas.present();
     }
 }

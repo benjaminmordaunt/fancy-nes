@@ -7,3 +7,7 @@ edition = "2021"
 version = "0.35.2"
 default-features = false
 features = ["ttf"]
+
+[dependencies]
+nes = { path = "../nes" }
+clap = { version = "3.1.6", features = ["derive"] }

@@ -68,7 +68,7 @@ pub struct NESCpu {
     /* instructions */
     target_address: u16,  /* "address" dumped straight from operand */
     wait_cycles: u8,      /* pending wait cycles */
-    pc_skip: u16,           /* how many bytes to advance the PC by for a given instr. */
+    pc_skip: u16,     /* how many bytes to advance the PC by for a given instr. */
 
     pub memory: CPUMemory,
 }

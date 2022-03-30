@@ -1,6 +1,6 @@
 //use core::fmt;
 
-mod cpu;
+pub mod cpu;
 
 #[derive(Debug)]
 pub enum Mirroring {
