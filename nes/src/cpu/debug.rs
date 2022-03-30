@@ -54,8 +54,16 @@ pub fn disasm_6502(instruction_addr: u16, mem: &mut CPUMemory ) -> (String, u16)
         Absolute => {
             disasm = (format!("{0} ${1:X}", instr.mnemonic, operand), 3);
         }
-        ZeroPage | Relative => {
+        ZeroPage => {
             disasm = (format!("{0} ${1:X}", instr.mnemonic, operand as u8), 2);
+        }
+        Relative => {
+            if (operand as u8) & 0b10000000 > 0 {
+                disasm = (format!("{0} ${1:X} (-${2:X})", instr.mnemonic, operand as u8,
+                    !(operand as u8) + 1), 2)
+            } else {
+                disasm = (format!("{0} ${1:X}", instr.mnemonic, operand as u8), 2);
+            }
         }
         ZeroPageX => {
             disasm = (format!("{0} ${1:X},X", instr.mnemonic, operand as u8), 2);
