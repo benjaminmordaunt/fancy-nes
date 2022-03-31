@@ -71,9 +71,9 @@ pub fn render_main() {
 }
 
 pub fn load_palette(colors: PathBuf) -> Vec<Color> {
-    let color_vec: Vec<Color>;
+    let mut color_vec: Vec<Color> = vec![];
 
     let data: Vec<u8> = std::fs::read(colors).unwrap();
-    data.chunks(3).for_each(|c| { color_vec.push(Color::RGB(c.0, c.1, c.2)) });
+    data.chunks(3).for_each(|c| { color_vec.push(Color::RGB(c[0], c[1], c[2])) });
     color_vec
 }
