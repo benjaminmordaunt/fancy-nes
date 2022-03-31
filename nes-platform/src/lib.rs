@@ -5,6 +5,7 @@ use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::rect::Rect;
 use sdl2::render::TextureQuery;
+use std::path::PathBuf;
 use std::time::Duration;
 
 pub fn render_main() {
@@ -67,4 +68,12 @@ pub fn render_main() {
         canvas.copy(&texture, None, Some(text_rect)).unwrap();
         canvas.present();
     }
+}
+
+pub fn load_palette(colors: PathBuf) -> Vec<Color> {
+    let color_vec: Vec<Color>;
+
+    let data: Vec<u8> = std::fs::read(colors).unwrap();
+    data.chunks(3).for_each(|c| { color_vec.push(Color::RGB(c.0, c.1, c.2)) });
+    color_vec
 }

@@ -7,6 +7,7 @@ use clap::{ArgEnum, Parser};
 use nes::cpu::NESCpu;
 use nes::cpu::debug::disasm_6502;
 use nes::cpu::decode::LUT_6502;
+use nes_platform::load_palette;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::Color;
@@ -26,6 +27,10 @@ struct Args {
     /// Path to NES ROM image
     #[clap(required = true, parse(from_os_str))]
     rom: PathBuf,
+
+    /// Path to a .pal (palette) file
+    #[clap(short, required = true, parse(from_os_str))]
+    palette: PathBuf,
 
     /// Force a specific region
     #[clap(short, arg_enum)]
@@ -50,6 +55,9 @@ fn main() {
     }
 
     cpu.memory.cartridge_mapper.load_prg_rom(&prg_rom_data);
+
+    let palette = load_palette(args.palette);
+
     cpu.reset();
     
     let mut disasm_strings: Vec<String> = vec![];
