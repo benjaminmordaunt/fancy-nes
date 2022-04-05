@@ -349,7 +349,9 @@ impl NESPPU {
             241..=260 => {
                 if self.scanline == 241 && self.tick == 1 {
                     self.ppu_status.insert(PPUSTATUS::VBLANK);
-                    self.cpu.borrow_mut().nmi();
+                    if self.ppu_ctrl.contains(PPUCTRL::NMI_ENABLED) {
+                        self.cpu.borrow_mut().nmi();
+                    }
                 }
             }
         }
