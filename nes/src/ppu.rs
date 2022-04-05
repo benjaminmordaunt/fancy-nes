@@ -109,8 +109,25 @@ pub struct NESPPU {
     addr_data_bus: u16,  /* The PPU uses the same bus for addr and data to save pins */
     tick: u16,           /* The tick on the current scanline (0-indexed) */
 
-    bg_pattern_shift_reg: [u16; 2],  /* Background pattern table shift registers */
-    bg_attribute_shift_reg: [u8; 2], /* Background palette attributes shift registers */
+    bg_pattern_shift_reg_hi: u16,  /* Background pattern table shift registers */
+    bg_pattern_shift_reg_lo: u16,
+
+    bg_pattern_next_hi: u8,
+    bg_pattern_next_lo: u8,
+     
+    bg_attribute_shift_reg_hi: u8, /* Background palette attributes shift registers */
+    bg_attribute_shift_reg_lo: u8,
+
+    bg_attribute_next_hi: u8,
+    bg_attribute_next_lo: u8,
+
+    /* Bit planes from the pattern table */
+    bg_next_pattern_lsb: u8,
+    bg_next_pattern_msb: u8,
+
+    /* Tile index into the nametable and attribute for next tile */
+    bg_next_tile: u8,
+    bg_next_attr: u8,
 
     cpu: Rc<RefCell<NESCpu>>,             /* A ref to CPU which lives at least as long as the PPU! (for interrupts) */
 } 
@@ -133,8 +150,22 @@ impl NESPPU {
             addr_data_bus: 0,
             tick: 0,
 
-            bg_pattern_shift_reg: [0; 2],
-            bg_attribute_shift_reg: [0; 2],
+            bg_pattern_shift_reg_lo: 0,
+            bg_pattern_shift_reg_hi: 0,
+            bg_attribute_shift_reg_lo: 0,
+            bg_attribute_shift_reg_hi: 0,
+
+            bg_pattern_next_hi: 0,
+            bg_pattern_next_lo: 0,
+
+            bg_attribute_next_hi: 0,
+            bg_attribute_next_lo: 0,
+
+            bg_next_attr: 0,
+            bg_next_tile: 0,
+
+            bg_next_pattern_lsb: 0,
+            bg_next_pattern_msb: 0,
 
             cpu
         }
@@ -244,8 +275,8 @@ impl NESPPU {
                 match (self.tick - 1) % 8 {
                     0 => {
                         // Load the background shift registers with pattern table data
-                        self.bg_pattern_shift_reg_hi = (self.bg_pattern_shift_reg_hi & 0x00FF) | self.bg_pattern_next_hi << 8;
-                        self.bg_pattern_shift_reg_lo = (self.bg_pattern_shift_reg_lo & 0x00FF) | self.bg_pattern_next_lo << 8;
+                        self.bg_pattern_shift_reg_hi = (self.bg_pattern_shift_reg_hi & 0x00FF) | (self.bg_pattern_next_hi as u16) << 8;
+                        self.bg_pattern_shift_reg_lo = (self.bg_pattern_shift_reg_lo & 0x00FF) | (self.bg_pattern_next_lo as u16) << 8;
 
                         // Load the attribute shift registers with an expanded (8x1 slither) attribute value
                         self.bg_attribute_shift_reg_hi = if self.bg_attribute_next_hi & 1 == 1 { 0xFF } else { 0x00 };
@@ -281,22 +312,44 @@ impl NESPPU {
                     }
                 }
 
-                // When we reach the end of a scanline, increment the fine Y-scroll, then course vertical scroll.
-                // Again, this algorithm is lovingly taken from NESDEV.
-                if self.vram_v & 0x7000 != 0x7000 {
-                    self.vram_v += 0x1000; // Standard fine-Y increment
-                } else {
-                    self.vram_v &= !0x7000;                       // Reset fine-Y to 0
-                    let mut y = (self.vram_v & 0x03E0) >> 5; // Fine-y = course-y
-                    if y == 29 {
-                        y = 0;
-                        self.vram_v ^= 0x0800;  // Switch the vertical nametable
-                    } else if y == 31 {
-                        y = 0;                  // Reset course Y, but don't switch nametable
+                if self.tick == 256 {
+                    // When we reach the end of a scanline, increment the fine Y-scroll, then course vertical scroll.
+                    // Again, this algorithm is lovingly taken from NESDEV.
+                    if self.vram_v & 0x7000 != 0x7000 {
+                        self.vram_v += 0x1000; // Standard fine-Y increment
                     } else {
-                        y += 1;                 // Increment course-Y
+                        self.vram_v &= !0x7000;                       // Reset fine-Y to 0
+                        let mut y = (self.vram_v & 0x03E0) >> 5; // Fine-y = course-y
+                        if y == 29 {
+                            y = 0;
+                            self.vram_v ^= 0x0800;  // Switch the vertical nametable
+                        } else if y == 31 {
+                            y = 0;                  // Reset course Y, but don't switch nametable
+                        } else {
+                            y += 1;                 // Increment course-Y
+                        }
+                        self.vram_v = (self.vram_v & !0x03E0) | (y << 5);
                     }
-                    self.vram_v = (self.vram_v & !0x03E0) | (y << 5);
+                }
+
+                if self.tick == 257 {
+                    // If rendering is enabled, transfer the X-affiliated parts of vram_t to vram_v.
+                    if self.ppu_mask.contains(PPUMASK::RENDERING) {
+                        self.vram_v = (self.vram_v & !0x41F) | (self.vram_t & 0x41F);
+                    }
+                }
+
+                if self.scanline == 261 && self.tick >= 280 && self.tick <= 304 {
+                    // End of the VBLANK period, copy the vertical bits from vram_t to vram_v.
+                    if self.ppu_mask.contains(PPUMASK::RENDERING) {
+                        self.vram_v = (self.vram_v & !0x7BE0) | (self.vram_t & 0x7BE0);
+                    }
+                }
+            }
+            241..=260 => {
+                if self.scanline == 241 && self.tick == 1 {
+                    self.ppu_status.insert(PPUSTATUS::VBLANK);
+                    self.cpu.borrow_mut().nmi();
                 }
             }
         }
@@ -305,7 +358,6 @@ impl NESPPU {
     pub fn render<F: FnMut(&[u8; 61440]) -> ()>(&self, mut f: F) {
         let mut result: [u8; 61440] = [0; 61440];
 
-        // Just focus on rendering the first nametable - and don't worry about colours for now.
         let pattern_bank = (self.ppu_ctrl.contains(PPUCTRL::BACKGROUND_TABLE_ADDR) as u16) << 3;
 
         for i in 0..0x03C0 {
