@@ -10,7 +10,7 @@ use super::{AddressingMode, mem::CPUMemory};
 pub fn disasm_6502(instruction_addr: u16, mem: &CPUMemory) -> (String, u16) {
     use AddressingMode::*;
 
-    let opcode = &mem.read(instruction_addr);
+    let opcode = &mem.observe(instruction_addr);
     let instr_opt = LUT_6502.get(opcode);
     let instr: &Instruction;
     let operand: u16;
@@ -29,13 +29,13 @@ pub fn disasm_6502(instruction_addr: u16, mem: &CPUMemory) -> (String, u16) {
         AddressingMode::IndexedIndirect |
         AddressingMode::Immediate |
         AddressingMode::Relative => {
-            operand = mem.read(instruction_addr + 1) as u16;
+            operand = mem.observe(instruction_addr + 1) as u16;
         },
         AddressingMode::Absolute |
         AddressingMode::AbsoluteX |
         AddressingMode::AbsoluteY |
         AddressingMode::Indirect => {
-            operand = mem.read_16(instruction_addr + 1);
+            operand = mem.observe_16(instruction_addr + 1);
         },
         _ => { operand = 0xDEAD; }
     }

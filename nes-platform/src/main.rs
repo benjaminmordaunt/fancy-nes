@@ -68,8 +68,8 @@ fn main() {
     let nes_rom_header = nes::NESHeaderMetadata::parse_header(&nes_rom).unwrap();
     
     // Load the PRG and CHR roms
-    let cpu_cell = Rc::new(RefCell::new(NESCpu::new(nes_rom_header.mapper_id as usize)));
-    let mut ppu = NESPPU::new(Rc::clone(&cpu_cell));
+    let cpu_cell = Rc::new(RefCell::new(NESCpu::new(nes_rom_header.mapper_id as usize, nes_rom_header.hardwired_mirroring)));
+    let mut ppu = Rc::new(RefCell::new(NESPPU::new(Rc::clone(&cpu_cell))));
 
     let mut prg_rom_data = vec![0; nes_rom_header.prg_rom_size as usize];
     let chr_rom_data: Vec<u8>;
@@ -87,7 +87,7 @@ fn main() {
     }
 
     cpu_cell.borrow_mut().memory.cartridge_mapper.load_prg_rom(&prg_rom_data);
-    ppu.load_chr_rom(&chr_rom_data);
+    cpu_cell.borrow_mut().memory.cartridge_mapper.load_chr_rom(&chr_rom_data);
 
     let palette = load_palette(args.palette);
     cpu_cell.borrow_mut().reset();
@@ -116,6 +116,9 @@ fn main() {
         .unwrap();
 
     let mut event_pump = sdl_context.event_pump().unwrap();
+
+    // Connect the PPU's registers to the CPU's address space
+    cpu_cell.borrow_mut().memory.ppu_registers = Some(ppu.clone());
 
     'running: loop {
         for event in event_pump.poll_iter() {
@@ -174,8 +177,8 @@ fn main() {
         }
 
         match &cpu_mode {
-            CPUMode::SingleStep => { if should_step { cpu_cell.borrow_mut().tick(); should_step = false; } }
-            CPUMode::Continuous => { cpu_cell.borrow_mut().tick(); }
+            CPUMode::SingleStep => { if should_step { cpu_cell.borrow_mut().tick(); ppu.borrow_mut().ppu_tick(3); should_step = false; } }
+            CPUMode::Continuous => { cpu_cell.borrow_mut().tick(); ppu.borrow_mut().ppu_tick(3); }
         }
 
         if show_debugger {
@@ -212,7 +215,7 @@ fn main() {
                 (NES_SCREEN_HEIGHT + palette_view_margin.top) as i32 - 1, 52, 16)).unwrap();
 
                 // Actually populate the palette information
-                ppu.palette.chunks(4).enumerate().for_each(|i| {
+                ppu.borrow().palette.chunks(4).enumerate().for_each(|i| {
                     let palette_idx = i.0;
                     let mut color_idx = 0;
 
@@ -231,26 +234,26 @@ fn main() {
             }
         }
 
-        {
+        if ppu.borrow().frame_ready {
             let mut canvas = canvas_cell.borrow_mut();
             
             // Render the complete image (this will not work for ROMs which change mid-frame)
             let mut tex_raw: [u8; 61440*4] = [0; 61440*4];
             
-            ppu.render(|pixels| {
-                pixels.iter().enumerate().for_each(
-                    |x| {
-                        tex_raw[x.0*4+0] = 0xFF;
-                        (tex_raw[x.0*4+1], tex_raw[x.0*4+2], tex_raw[x.0*4+3]) = palette[*x.1 as usize].rgb();
-                    }
-                )
-            });
-
+            for y in 0..240 {
+                for x in 0..256 {
+                    tex_raw[x * 4 + y * 256 * 4] = 0xFF; // Opaque
+                    (tex_raw[x * 4 + 1 + y * 256 * 4],
+                        tex_raw[x * 4 + 2 + y * 256 * 4],
+                        tex_raw[x * 4 + 3 + y * 256 * 4])
+                        = palette[ppu.borrow().frame[x + y * 256] as usize].rgb();
+                }
+            }
             
             nes_texture.update(Rect::new(0, 0, 256, 240), &tex_raw, 4 * 256).unwrap();
             canvas.copy(&nes_texture, None, Some(Rect::new(0, 0, NES_SCREEN_WIDTH, NES_SCREEN_HEIGHT))).unwrap();
-
-            canvas.present();
         }
+
+        canvas_cell.borrow_mut().present();
     }
 }

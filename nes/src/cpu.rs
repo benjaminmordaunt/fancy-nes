@@ -3,6 +3,8 @@ use std::rc::Rc;
 
 use bitflags::bitflags;
 
+use crate::Mirroring;
+
 use self::decode::{LUT_6502, Instruction};
 use self::mapper000::Mapper000;
 use self::mem::*;
@@ -75,7 +77,7 @@ pub struct NESCpu {
 }
 
 impl NESCpu {
-    pub fn new(mapper_id: usize) -> Self {
+    pub fn new(mapper_id: usize, mirroring: Mirroring) -> Self {
         Self {
             status: StatusRegister::empty(),
             PC: 0, /* given a correct value from the reset method  */
@@ -88,12 +90,12 @@ impl NESCpu {
             pc_skip: 0,
             memory: CPUMemory {
                 internal_ram: [0; 2048],
-                ppu_registers: [0; 8],
+                ppu_registers: None,  // Begin with PPU detached completely detached from the CPU's address space
                 io_registers: [0; 24],
                 cartridge_mapper: Box::new(
                     match mapper_id {
                         0 => {
-                            Mapper000::new()
+                            Mapper000::new(mirroring)
                         }
                         _ => unimplemented!()
                     }

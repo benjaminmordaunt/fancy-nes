@@ -10,15 +10,15 @@ use bitflags::bitflags;
 use crate::cpu::NESCpu;
 
 mod PPUAddress {
-    const PPUCTRL: u16   = 0x2000;
-    const PPUMASK: u16   = 0x2001;
-    const PPUSTATUS: u16 = 0x2002;
-    const OAMADDR: u16   = 0x2003;
-    const OAMDATA: u16   = 0x2004;
-    const PPUSCROLL: u16 = 0x2005;
-    const PPUADDR: u16   = 0x2006;
-    const PPUDATA: u16   = 0x2007;
-    const OAMDMA: u16    = 0x4014;
+    pub const PPUCTRL: u16   = 0x2000;
+    pub const PPUMASK: u16   = 0x2001;
+    pub const PPUSTATUS: u16 = 0x2002;
+    pub const OAMADDR: u16   = 0x2003;
+    pub const OAMDATA: u16   = 0x2004;
+    pub const PPUSCROLL: u16 = 0x2005;
+    pub const PPUADDR: u16   = 0x2006;
+    pub const PPUDATA: u16   = 0x2007;
+    pub const OAMDMA: u16    = 0x4014;
 }
 
 bitflags! {
@@ -58,7 +58,6 @@ bitflags! {
 }
 
 pub struct NESPPU {
-    chr_rom: Vec<u8>,  /* The CHR (character) ROM, static graphics tile data */
     /* Palette memory map:
         0      - universal background colour     \
         1..3   - background palette 0            /`--- (bg 0 selected)
@@ -67,7 +66,7 @@ pub struct NESPPU {
         8      - (aliases to 0*+)                \
         9..B   - background palette 2            /`--- (bg 2 selected)
         C      - (aliases to 0*+)                \
-        D..F   - background palette 3            /`--- (bg 3 selected)
+        D..F   - bacckground palette 3            /`--- (bg 3 selected)
         10     - (aliases to 0*)                 \
         11..13 - sprite palette 0                /`--- (sp 0 selected)
         14     - (aliases to 0*)                 \
@@ -112,6 +111,7 @@ pub struct NESPPU {
     bg_pattern_shift_reg_hi: u16,  /* Background pattern table shift registers */
     bg_pattern_shift_reg_lo: u16,
 
+    /* Bit planes from the pattern table */
     bg_pattern_next_hi: u8,
     bg_pattern_next_lo: u8,
      
@@ -121,21 +121,22 @@ pub struct NESPPU {
     bg_attribute_next_hi: u8,
     bg_attribute_next_lo: u8,
 
-    /* Bit planes from the pattern table */
-    bg_next_pattern_lsb: u8,
-    bg_next_pattern_msb: u8,
-
     /* Tile index into the nametable and attribute for next tile */
     bg_next_tile: u8,
     bg_next_attr: u8,
 
+    // PPUDATA is buffered by one CPU access
+    data_bus_next: u8,
+
     cpu: Rc<RefCell<NESCpu>>,             /* A ref to CPU which lives at least as long as the PPU! (for interrupts) */
+
+    pub frame: [u8; 61440],  /* A frame, to be rendered when frame_complete is signalled */
+    pub frame_ready: bool,
 } 
 
 impl NESPPU {
     pub fn new(cpu: Rc<RefCell<NESCpu>>) -> Self {
         Self {
-            chr_rom: vec![],
             palette: [0; 32],
             vram: [0; 2048],
             oam: [0; 256],
@@ -164,15 +165,42 @@ impl NESPPU {
             bg_next_attr: 0,
             bg_next_tile: 0,
 
-            bg_next_pattern_lsb: 0,
-            bg_next_pattern_msb: 0,
+            data_bus_next: 0,
 
+            frame: [0; 61440],
+            frame_ready: false,
             cpu
         }
     }
 
-    pub fn load_chr_rom(&mut self, rom: &Vec<u8>) {
-        self.chr_rom = rom.clone();
+    fn read(&self, mut addr: u16) -> u8 {
+        match addr {
+            // Remappable addresses by the mapper - might come straight back to internal VRAM if mapped that way!
+            // If the mapper returns a word starting with 0x1***, treat *** as an index into PPU RAM.
+            0x0000..=0x3EFF => {
+                let word: u16;
+                word = self.cpu.borrow().memory.cartridge_mapper.read_ppu(addr);
+
+                if word & 0x1000 > 0 {
+                    self.vram[word as usize & 0x0FFF]
+                } else {
+                    (word & 0xFF) as u8
+                }
+            }
+            0x3F00..=0x3FFF => {
+                // Alias sprite clear accesses to the background clear accesses.
+                match addr {
+                    0x3F10 | 0x3F14 | 0x3F18 | 0x3F1C => { addr -= 0x10; }
+                    _ => {}
+                }
+                self.palette[addr as usize & 0x1F] & (if self.ppu_mask.contains(PPUMASK::GREYSCALE) { 0x30 } else { 0x3F })
+            }
+            _ => { unreachable!() }
+        }
+    }
+
+    fn write(&mut self, addr: u16, data: u8) {
+        self.cpu.borrow_mut().memory.cartridge_mapper.write_ppu(addr, data);
     }
 
     /// Fetches the address of the tile and attribute data for a given VRAM access
@@ -181,14 +209,18 @@ impl NESPPU {
          (0x23C0 | (addr & 0x0C00) | ((addr >> 4) & 0x38) | ((addr >> 2) & 0x07)))
     }
 
-    fn ppu_register_write(&mut self, addr: u16, data: u8) {
-
+    // Interpreted in terms of the CPU's address space
+    pub fn ppu_register_write(&mut self, addr: u16, data: u8) {
         match addr {
-        PPUCTRL => {
+        PPUAddress::PPUCTRL => {
             // Populate lo-nybble of high byte of base nametable address
             self.vram_t = (self.vram_t & 0xF3FF) | ((data as u16 & 0x3) << 10);
         }
-        PPUSCROLL => {
+        PPUAddress::PPUMASK => {
+            // TODO: Implement background and sprite hiding in the leftmost 8 pixels + colour emphasis
+            self.ppu_mask = PPUMASK::from_bits_truncate(data);
+        }
+        PPUAddress::PPUSCROLL => {
             if !self.write_toggle {
                 self.vram_x = data as u16 & 0x7;
                 self.vram_t = (self.vram_t & 0xFFE0) | ((data as u16 >> 0x3) & 0x1F);
@@ -198,7 +230,7 @@ impl NESPPU {
             }
             self.write_toggle = !self.write_toggle;
         }
-        PPUADDR => {
+        PPUAddress::PPUADDR => {
             if !self.write_toggle {
                 self.vram_t = (self.vram_t & 0xFF) | ((data as u16 & 0x3F) << 8);
             } else {
@@ -207,54 +239,42 @@ impl NESPPU {
             }
             self.write_toggle = !self.write_toggle;
         }
+        PPUAddress::PPUDATA => {
+            // Just immediately write the data
+            self.write(self.vram_v, data);
+        }
+        _ => { panic!("{}", addr) }
         }
     }
 
-    fn ppu_register_read(&mut self, addr: u16) -> u8 {
+    // Addresses interpreted in terms of the CPU's address space
+    // Reads from these registers typically exhibit side effects (hence the mut ref)
+    pub fn ppu_register_read(&mut self, addr: u16) -> u8 {
         let data: u8;
 
         match addr {
-        PPUSTATUS => {
+        PPUAddress::PPUSTATUS => {
             data = self.ppu_status.bits();
             self.ppu_status.remove(PPUSTATUS::VBLANK);
             self.write_toggle = false;
         }
-        _ => { todo!() }
-        }
-
-        data
-    }
-    
-    /// Handles rendering behaviour of the PPU from a "high level"
-    /// i.e. depends only on the current scanline (0-261)
-    fn ppu_do_scanline(&mut self) {
-        // If we're not in VBLANK and rendering, do data address/fetching
-        if !self.ppu_status.contains(PPUSTATUS::VBLANK) && self.ppu_mask.contains(PPUMASK::RENDERING) {
-            if self.tick % 2 == 0 {
-                // Address
-                self.addr_data_bus = self.vram_v;
+        PPUAddress::PPUDATA => {
+            if addr < 0x03F00 {
+                // Update the internal buffer
+                data = self.data_bus_next;
+                self.data_bus_next = self.read(addr);
             } else {
-                // Readback
-                self.addr_data_bus = (self.addr_data_bus & 0xFF00) 
-                    | self.vram[self.addr_data_bus as usize] as u16;
+                // Otherwise, we get palette data via combinatorial logic
+                data = self.read(addr);
             }
-        }
 
-        match self.scanline {
-        // Visible scanlines
-        0..=239 => {
-            
-        }
-        241 => {
-            if self.tick == 1 {
-                // If NMI enabled in ppu_ctrl, raise an interrupt to the CPU
-                if self.ppu_ctrl.contains(PPUCTRL::NMI_ENABLED) {
-                    self.cpu.borrow_mut().nmi();
-                }
-            }
+            // Perform VRAM addr increment
+            let increment = if self.ppu_ctrl.contains(PPUCTRL::VRAM_INCREMENT) { 32 } else { 1 };
+            self.vram_v += increment;
         }
         _ => { todo!() }
         }
+        data
     }
 
     /// (NTSC) 3 of these happen per CPU tick.
@@ -263,125 +283,153 @@ impl NESPPU {
     /// that event is executed, otherwise tcount is incremented by count
     /// and we move on with life.
     pub fn ppu_tick(&mut self, count: usize) {
-        match self.scanline {
-            // All "rendering" scanlines - those which make standard PPU memory accesses.
-            0..=239 | 261 => {
-                // Pre-render scanline
-                if self.scanline == 261 {
-                    // Clear the PPU's status
-                    self.ppu_status = PPUSTATUS::from_bits_truncate(0);
-                }
+        for _ in 0..count {
+            match self.scanline {
+                // All "rendering" scanlines - those which make standard PPU memory accesses.
+                0..=239 | 261 => {
+                    // Idle-skip on first scanline (picture crispness - apparently)
+                    if self.scanline == 0 && self.tick == 0 {
+                        self.tick = 1;
+                    }
 
-                match (self.tick - 1) % 8 {
-                    0 => {
-                        // Load the background shift registers with pattern table data
-                        self.bg_pattern_shift_reg_hi = (self.bg_pattern_shift_reg_hi & 0x00FF) | (self.bg_pattern_next_hi as u16) << 8;
-                        self.bg_pattern_shift_reg_lo = (self.bg_pattern_shift_reg_lo & 0x00FF) | (self.bg_pattern_next_lo as u16) << 8;
+                    // Pre-render scanline
+                    if self.scanline == 261 && self.tick == 1 {
+                        // Clear the PPU's status
+                        self.ppu_status = PPUSTATUS::from_bits_truncate(0);
+                    }
 
-                        // Load the attribute shift registers with an expanded (8x1 slither) attribute value
-                        self.bg_attribute_shift_reg_hi = if self.bg_attribute_next_hi & 1 == 1 { 0xFF } else { 0x00 };
-                        self.bg_attribute_shift_reg_lo = if self.bg_attribute_next_lo & 1 == 1 { 0xFF } else { 0x00 };
+                    if matches!(self.tick, 2..=256 | 321..=336) {
+                        self.bg_attribute_shift_reg_hi >>= 1;
+                        self.bg_attribute_shift_reg_lo >>= 1;
 
-                        self.bg_next_tile = self.read(&NESPPU::tile_attr_from_vram_addr(self.vram_v).0);
+                        self.bg_pattern_shift_reg_hi >>= 1;
+                        self.bg_pattern_shift_reg_lo >>= 1;
+
+                        match (self.tick - 1) % 8 {
+                            0 => {
+                                // Load the background shift registers with pattern table data
+                                self.bg_pattern_shift_reg_hi = (self.bg_pattern_shift_reg_hi & 0x00FF) | (self.bg_pattern_next_hi as u16) << 8;
+                                self.bg_pattern_shift_reg_lo = (self.bg_pattern_shift_reg_lo & 0x00FF) | (self.bg_pattern_next_lo as u16) << 8;
+
+                                // Load the attribute shift registers with an expanded (8x1 slither) attribute value
+                                self.bg_attribute_shift_reg_hi = if self.bg_attribute_next_hi & 1 == 1 { 0xFF } else { 0x00 };
+                                self.bg_attribute_shift_reg_lo = if self.bg_attribute_next_lo & 1 == 1 { 0xFF } else { 0x00 };
+
+                                self.bg_next_tile = self.read(NESPPU::tile_attr_from_vram_addr(self.vram_v).0);
+                            }
+                            2 => {
+                                self.bg_next_attr = self.read(NESPPU::tile_attr_from_vram_addr(self.vram_v).1);
+                            }
+                            4 => {
+                                // Get the lsb bit plane from the pattern table for the next tile
+                                self.bg_pattern_next_lo = self.read(
+                                    (self.ppu_ctrl.contains(PPUCTRL::BACKGROUND_TABLE_ADDR) as u16) << 12
+                                |   (self.bg_next_tile as u16) << 4
+                                |   ((self.vram_v & 0x7000) << 12)); 
+                            }
+                            6 => {
+                                // Get the msb bit plane from the pattern table for the next tile (+8 offset from LSB)
+                                self.bg_pattern_next_hi = self.read(
+                                    (self.ppu_ctrl.contains(PPUCTRL::BACKGROUND_TABLE_ADDR) as u16) << 12
+                                |   (self.bg_next_tile as u16) << 4
+                                |   ((self.vram_v & 0x7000) << 12) + 8);
+                            }
+                            7 => {
+                                // Scroll horizontally (algorithm taken from NESDEV)
+                                if self.vram_v & 0x001F == 31 { // Are we at the end of a nametable?
+                                    self.vram_v &= !0x001F;     // Reset course X to 0
+                                    self.vram_v ^= 0x0400;      // Switch the horizontal nametable
+                                } else {
+                                    self.vram_v += 1; // Increment as usual :-)
+                                }
+                            }
+                            _ => {}
+                        }
                     }
-                    2 => {
-                        self.bg_next_attr = self.read(&NESPPU::tile_attr_from_vram_addr(self.vram_v).1);
-                    }
-                    4 => {
-                        // Get the lsb bit plane from the pattern table for the next tile
-                        self.bg_next_pattern_lsb = self.read(
-                            (self.ppu_ctrl.contains(PPUCTRL::BACKGROUND_TABLE_ADDR) as u16) << 12
-                        |   (self.bg_next_tile as u16) << 4
-                        |   ((self.vram_v & 0x7000) << 12)); 
-                    }
-                    6 => {
-                        // Get the msb bit plane from the pattern table for the next tile (+8 offset from LSB)
-                        self.bg_next_pattern_lsb = self.read(
-                            (self.ppu_ctrl.contains(PPUCTRL::BACKGROUND_TABLE_ADDR) as u16) << 12
-                        |   (self.bg_next_tile as u16) << 4
-                        |   ((self.vram_v & 0x7000) << 12) + 8);
-                    }
-                    7 => {
-                        // Scroll horizontally (algorithm taken from NESDEV)
-                        if self.vram_v & 0x001F == 31 { // Are we at the end of a nametable?
-                            self.vram_v &= !0x001F;     // Reset course X to 0
-                            self.vram_v ^= 0x0400;      // Switch the horizontal nametable
+
+                    if self.tick == 256 {
+                        // When we reach the end of a scanline, increment the fine Y-scroll, then course vertical scroll.
+                        // Again, this algorithm is lovingly taken from NESDEV.
+                        if self.vram_v & 0x7000 != 0x7000 {
+                            self.vram_v += 0x1000; // Standard fine-Y increment
                         } else {
-                            self.vram_v += 1; // Increment as usual :-)
+                            self.vram_v &= !0x7000;                       // Reset fine-Y to 0
+                            let mut y = (self.vram_v & 0x03E0) >> 5; // Fine-y = course-y
+                            if y == 29 {
+                                y = 0;
+                                self.vram_v ^= 0x0800;  // Switch the vertical nametable
+                            } else if y == 31 {
+                                y = 0;                  // Reset course Y, but don't switch nametable
+                            } else {
+                                y += 1;                 // Increment course-Y
+                            }
+                            self.vram_v = (self.vram_v & !0x03E0) | (y << 5);
+                        }
+                    }
+
+                    if self.tick == 257 {
+                        // If rendering is enabled, transfer the X-affiliated parts of vram_t to vram_v.
+                        if self.ppu_mask.contains(PPUMASK::RENDERING) {
+                            self.vram_v = (self.vram_v & !0x41F) | (self.vram_t & 0x41F);
+                        }
+                    }
+
+                    if self.scanline == 261 && self.tick >= 280 && self.tick <= 304 {
+                        // End of the VBLANK period, copy the vertical bits from vram_t to vram_v.
+                        if self.ppu_mask.contains(PPUMASK::RENDERING) {
+                            self.vram_v = (self.vram_v & !0x7BE0) | (self.vram_t & 0x7BE0);
                         }
                     }
                 }
-
-                if self.tick == 256 {
-                    // When we reach the end of a scanline, increment the fine Y-scroll, then course vertical scroll.
-                    // Again, this algorithm is lovingly taken from NESDEV.
-                    if self.vram_v & 0x7000 != 0x7000 {
-                        self.vram_v += 0x1000; // Standard fine-Y increment
-                    } else {
-                        self.vram_v &= !0x7000;                       // Reset fine-Y to 0
-                        let mut y = (self.vram_v & 0x03E0) >> 5; // Fine-y = course-y
-                        if y == 29 {
-                            y = 0;
-                            self.vram_v ^= 0x0800;  // Switch the vertical nametable
-                        } else if y == 31 {
-                            y = 0;                  // Reset course Y, but don't switch nametable
-                        } else {
-                            y += 1;                 // Increment course-Y
+                241..=260 => {
+                    if self.scanline == 241 && self.tick == 1 {
+                        self.ppu_status.insert(PPUSTATUS::VBLANK);
+                        if self.ppu_ctrl.contains(PPUCTRL::NMI_ENABLED) {
+                            self.cpu.borrow_mut().nmi();
                         }
-                        self.vram_v = (self.vram_v & !0x03E0) | (y << 5);
                     }
                 }
+                _ => {}
+            }
 
-                if self.tick == 257 {
-                    // If rendering is enabled, transfer the X-affiliated parts of vram_t to vram_v.
-                    if self.ppu_mask.contains(PPUMASK::RENDERING) {
-                        self.vram_v = (self.vram_v & !0x41F) | (self.vram_t & 0x41F);
-                    }
-                }
+            let mut bg_pixel: u8 = 0;    /* An index into a palette */
+            let mut bg_palette: u8 = 0;  /* Which palette are we indexing? */
 
-                if self.scanline == 261 && self.tick >= 280 && self.tick <= 304 {
-                    // End of the VBLANK period, copy the vertical bits from vram_t to vram_v.
-                    if self.ppu_mask.contains(PPUMASK::RENDERING) {
-                        self.vram_v = (self.vram_v & !0x7BE0) | (self.vram_t & 0x7BE0);
-                    }
+            if self.ppu_mask.contains(PPUMASK::BACKGROUND) {
+                // Retrieve the pattern information, indexing with fine_x
+                let lbp_pattern = ((self.bg_pattern_shift_reg_lo & (1 << self.vram_x)) > 0) as u8;
+                let hbp_pattern = ((self.bg_pattern_shift_reg_hi & (1 << self.vram_x)) > 0) as u8;
+                
+                bg_pixel = (hbp_pattern << 1) | lbp_pattern;
+
+                // Now let's get the corresponding palette information
+                let lbp_attribute = ((self.bg_attribute_shift_reg_lo & (1 << self.vram_x)) > 0) as u8;
+                let hbp_attribute = ((self.bg_attribute_next_hi & (1 << self.vram_x)) > 0) as u8;
+
+                bg_palette = (hbp_attribute << 1) | lbp_attribute;
+            }
+
+            // Read palette RAM to determine which colour code this pixel is
+            let bg_pix_colour = self.read(0x3F00 | ((bg_palette as u16) << 2) | (bg_pixel as u16));
+
+            // Add this colour code to the pixel array, only if we are in the visible region.
+            // Note that on a real NES, the first pixel output is not produced until tick = 4
+            if self.scanline >= 0 && self.scanline <= 239
+                && self.tick >= 1 && self.tick <= 256 {
+                    self.frame[self.scanline as usize * 256 + (self.tick as usize - 1)] = bg_pix_colour;
+            }
+
+            self.tick += 1;
+            if self.tick >= 341 {
+                self.tick = 0;
+                self.scanline += 1;
+                if self.scanline >= 262 {
+                    self.scanline = 0;
+                    self.frame_ready = true;
                 }
             }
-            241..=260 => {
-                if self.scanline == 241 && self.tick == 1 {
-                    self.ppu_status.insert(PPUSTATUS::VBLANK);
-                    if self.ppu_ctrl.contains(PPUCTRL::NMI_ENABLED) {
-                        self.cpu.borrow_mut().nmi();
-                    }
-                }
-            }
+
+            println!("Scanline: {}, Tick: {}", self.scanline, self.tick);
         }
-    }
-
-    pub fn render<F: FnMut(&[u8; 61440]) -> ()>(&self, mut f: F) {
-        let mut result: [u8; 61440] = [0; 61440];
-
-        let pattern_bank = (self.ppu_ctrl.contains(PPUCTRL::BACKGROUND_TABLE_ADDR) as u16) << 3;
-
-        for i in 0..0x03C0 {
-            let tile = self.vram[i] as u16; // Fetch the nametable byte from cartridge-mapped CHR ROM/RAM
-            let tile_x = tile % 32;
-            let tile_y = tile / 32;
-            let tile = &self.chr_rom[(pattern_bank + tile * 16) as usize..=(pattern_bank + tile * 16 + 15) as usize];
-
-            for y in 0..8 { // The row number within a tile
-                let mut lower = tile[y]; // The colour index bit planes
-                let mut upper = tile[y + 8];
-
-                // The 8 pixels in the x-direction (add to result in top-left to bottom-right order)
-                for x in (0..8).rev() {
-                    let value = (lower & 1) | (upper & 1) << 1;
-                    lower >>= 1;
-                    upper >>= 1;
-                    result[(tile_y as usize + y) * 64 + (tile_x as usize + x)] = value;
-                }
-            }
-        }
-
-        f(&result);
     }
 }
