@@ -1,5 +1,13 @@
 extern crate sdl2;
 
+pub const NES_SCREEN_SCALE: u32 = 2;
+pub const NES_SCREEN_HEIGHT: u32 = 240 * NES_SCREEN_SCALE;
+pub const NES_SCREEN_WIDTH: u32 = 256 * NES_SCREEN_SCALE;
+pub const NES_DEBUGGER_WIDTH: u32 = 260;
+pub const NES_PPU_INFO_HEIGHT: u32 = 200;
+
+pub mod debug_view;
+
 use sdl2::pixels::Color;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;

@@ -34,7 +34,7 @@ pub struct CPUMemory {
 }
 
 impl CPUMemory {
-    pub fn read(&mut self, addr: u16) -> u8 {
+    pub fn read(&self, addr: u16) -> u8 {
         /* Internal RAM */
         if (addr & 0xF000) < 0x2000 {
             return self.internal_ram[(addr & 0x07FF) as usize];
@@ -63,9 +63,9 @@ impl CPUMemory {
         unimplemented!();
     }
 
-    pub fn read_16(&mut self, addr: u16) -> u16 {
+    pub fn read_16(&self, addr: u16) -> u16 {
         self.read(addr) as u16
-        + (self.read(addr + 1) as u16) << 8
+        | (self.read(addr + 1) as u16) << 8
     }
 
     pub fn write(&mut self, addr: u16, data: u8) {

@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::rc::Rc;
 
 use bitflags::bitflags;
 
@@ -8,7 +9,7 @@ use self::mem::*;
 
 pub mod decode;
 pub mod debug;
-mod mem;
+pub mod mem;
 
 // Mappers
 mod mapper;
@@ -101,7 +102,7 @@ impl NESCpu {
         }
     }
 
-    pub fn do_op(&mut self) {
+    pub fn tick(&mut self) {
         /* Fetch stage */
         let op = self.memory.read(self.PC);
         let instr_opt = LUT_6502.get(&op);
@@ -511,16 +512,7 @@ impl NESCpu {
     }
 
     /* Handle the NMI (non-maskable interrupt) - called primarily by the PPU */
-    fn nmi(&mut self) {
-        self.memory.write(self.SP as u16 + 0x0100, (self.PC >> 8) as u8); /* PC, MSB */
-        self.SP -= 1;
-        self.memory.write(self.SP as u16 + 0x0100, self.PC as u8); /* PC, LSB */
-        self.SP -= 1;
-        self.status.remove(StatusRegister::BREAK_LOW); /* NMI is a hard interrupt */
-        self.memory.write(self.SP as u16 + 0x0100, self.status.bits()); /* Status */
-        self.SP -= 1;
-        self.status.set(StatusRegister::INTERRUPT_DISABLE, true);
-        self.PC = self.memory.read(0xFFEA) as u16 +
-                (self.memory.read(0xFFEB) as u16) << 8;
+    pub fn nmi(&mut self) {
+        self.enter_subroutine(&InterruptType::NMI);
     }
 }

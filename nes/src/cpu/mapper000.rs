@@ -15,7 +15,7 @@ pub struct Mapper000 {
 }
 
 impl Mapper for Mapper000 {
-    fn read(&mut self, addr: u16) -> u8 {
+    fn read(&self, addr: u16) -> u8 {
         match addr {
             0x6000..=0x7FFF => {
                 return self.prg_ram[addr as usize - 0x6000];

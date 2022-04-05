@@ -2,7 +2,10 @@
 /// In reality, most mappers don't handle addresses < $6000, where work RAM typically begins.
 
 pub trait Mapper {
-    fn read(&mut self, addr: u16) -> u8;
+
+    // Use the &self version for no-side-effect (fake) accesses, such as
+    // querying memory for the disassembler
+    fn read(&self, addr: u16) -> u8;
     fn write(&mut self, addr: u16, data: u8);
 
     fn load_prg_rom(&mut self, rom: &Vec<u8>);

@@ -7,7 +7,7 @@ use super::{AddressingMode, mem::CPUMemory};
 
 // Returns the string of disassembly, as well as the address delta to the next
 // instruction.
-pub fn disasm_6502(instruction_addr: u16, mem: &mut CPUMemory ) -> (String, u16) {
+pub fn disasm_6502(instruction_addr: u16, mem: &CPUMemory) -> (String, u16) {
     use AddressingMode::*;
 
     let opcode = &mem.read(instruction_addr);
