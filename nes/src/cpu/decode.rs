@@ -4,6 +4,7 @@ use std::{collections::HashMap, vec};
 use lazy_static::lazy_static;
 use super::AddressingMode;
 
+#[derive(Clone, Copy)]
 pub struct Instruction {
     pub mnemonic: &'static str,
     pub mode: AddressingMode,

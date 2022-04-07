@@ -63,6 +63,8 @@ impl<'a> DebugView<'a> {
     }
 
     pub fn render(&self, mut canvas: RefMut<Canvas<Window>>) {
+        
+
         let surface = self.font
             .render(
             self.addresses.iter().enumerate()

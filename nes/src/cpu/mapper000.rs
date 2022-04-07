@@ -71,6 +71,7 @@ impl Mapper for Mapper000 {
                 match self.mirroring {
                     Mirroring::Horizontal => {
                         addr &= !(1 << 10);
+                        if addr & 0x800 > 0 { addr -= 0x400 }
                     }
                     Mirroring::Vertical => {
                         addr &= !(1 << 11);
@@ -96,6 +97,7 @@ impl Mapper for Mapper000 {
                 match self.mirroring {
                     Mirroring::Horizontal => {
                         addr &= !(1 << 10);
+                        if addr & 0x800 > 0 { addr -= 0x400 }
                     }
                     Mirroring::Vertical => {
                         addr &= !(1 << 11);

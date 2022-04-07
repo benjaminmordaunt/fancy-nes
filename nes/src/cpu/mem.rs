@@ -46,7 +46,7 @@ impl CPUMemory {
 
         /* PPU control registers */
         if (addr & 0xF000) == 0x2000 || (addr & 0xF000) == 0x3000 {
-            return self.ppu_registers.as_mut().unwrap().borrow_mut().ppu_register_read(addr);
+            return self.ppu_registers.as_mut().unwrap().borrow_mut().ppu_register_read(0x2000 + (addr & 0x7));
         }
 
         /* APU and I/O */
@@ -118,7 +118,7 @@ impl CPUMemory {
         /* PPU control registers */
         /* TODO - in reality these are PPU mapped and take effect */
         if (addr & 0xF000) == 0x2000 || (addr & 0xF000) == 0x3000 {
-            self.ppu_registers.as_mut().unwrap().borrow_mut().ppu_register_write(addr, data);
+            self.ppu_registers.as_mut().unwrap().borrow_mut().ppu_register_write(0x2000 + (addr & 0x7), data);
         }
 
         /* APU and I/O */

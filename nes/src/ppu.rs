@@ -272,7 +272,7 @@ impl NESPPU {
             let increment = if self.ppu_ctrl.contains(PPUCTRL::VRAM_INCREMENT) { 32 } else { 1 };
             self.vram_v += increment;
         }
-        _ => { todo!() }
+        _ => { panic!("{:X}", addr) }
         }
         data
     }
@@ -428,8 +428,6 @@ impl NESPPU {
                     self.frame_ready = true;
                 }
             }
-
-            println!("Scanline: {}, Tick: {}", self.scanline, self.tick);
         }
     }
 }

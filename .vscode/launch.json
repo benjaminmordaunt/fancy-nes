@@ -1,0 +1,84 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in library 'nes'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--lib",
+                    "--package=nes"
+                ],
+                "filter": {
+                    "name": "nes",
+                    "kind": "lib"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in library 'nes-platform'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--lib",
+                    "--package=nes-platform"
+                ],
+                "filter": {
+                    "name": "nes-platform",
+                    "kind": "lib"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'nes-platform'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=nes-platform",
+                    "--package=nes-platform"
+                ],
+                "filter": {
+                    "name": "nes-platform",
+                    "kind": "bin"
+                }
+            },
+            "args": ["/Users/benjaminmordaunt/Downloads/Donkey Kong (World) (Rev A).nes", "-p", "/Users/benjaminmordaunt/Downloads/nespalette.pal"],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'nes-platform'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=nes-platform",
+                    "--package=nes-platform"
+                ],
+                "filter": {
+                    "name": "nes-platform",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}

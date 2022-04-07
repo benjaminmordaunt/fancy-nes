@@ -1,9 +1,11 @@
 use std::cell::RefCell;
+use std::ops::Add;
 use std::rc::Rc;
 
 use bitflags::bitflags;
 
 use crate::Mirroring;
+use crate::cpu::debug::disasm_6502;
 
 use self::decode::{LUT_6502, Instruction};
 use self::mapper000::Mapper000;
@@ -44,6 +46,7 @@ enum InterruptType {
     NMI,        /* non-maskable interrupt (from PPU) */
 }
 
+#[derive(Clone, Copy)]
 pub enum AddressingMode {
     Implied,
     Accumulator,
@@ -74,6 +77,8 @@ pub struct NESCpu {
     pc_skip: u16,     /* how many bytes to advance the PC by for a given instr. */
 
     pub memory: CPUMemory,
+
+    last_legal_instruction: Option<u16>,
 }
 
 impl NESCpu {
@@ -100,7 +105,8 @@ impl NESCpu {
                         _ => unimplemented!()
                     }
                 )
-            }
+            },
+            last_legal_instruction: None,
         }
     }
 
@@ -112,10 +118,15 @@ impl NESCpu {
 
         if instr_opt.is_none() {
             println!("No instruction found for opcode ${:X}", op);
-            return;
+            if self.last_legal_instruction.is_some() {
+                let pc = self.last_legal_instruction.unwrap();
+                println!("Disasm of previous instruction: ${:X}: {}", pc, disasm_6502(pc, &self.memory).0)
+            }
+            panic!();
         }
 
         instr = instr_opt.unwrap();
+        self.last_legal_instruction = Some(self.PC);
 
         /* Execute stage */
         match instr.mnemonic {
@@ -139,11 +150,11 @@ impl NESCpu {
             "CMP" => self.op_compare(self.A, &instr.mode),
             "CPX" => self.op_compare(self.X, &instr.mode),
             "CPY" => self.op_compare(self.Y, &instr.mode),
-            "DEC" => self.A = self.op_incdec(self.A, false),
+            "DEC" => self.op_incdec_addr(false, &instr.mode),
             "DEX" => self.X = self.op_incdec(self.X, false),
             "DEY" => self.Y = self.op_incdec(self.Y, false),
             "EOR" => self.A = self.op_bitwise(&instr.mode, |x, y| { x ^ y }),
-            "INC" => self.A = self.op_incdec(self.A, true),
+            "INC" => self.op_incdec_addr(true, &instr.mode),
             "INX" => self.X = self.op_incdec(self.X, true),
             "INY" => self.Y = self.op_incdec(self.Y, true),
             "JMP" => self.op_jump(&instr.mode),
@@ -250,7 +261,7 @@ impl NESCpu {
                 return (addr_lsb as u16 + (addr_msb as u16) << 4, false);
             }
             AddressingMode::IndexedIndirect => {
-                let zp_addr: u16 = (self.target_address as u8 + self.X) as u16;
+                let zp_addr: u16 = self.target_address + self.X as u16;
                 return (self.memory.read_16(zp_addr), false);
             }
             AddressingMode::IndirectIndexed => {
@@ -342,9 +353,16 @@ impl NESCpu {
         result
     }
 
+    fn op_incdec_addr(&mut self, inc: bool, mode: &AddressingMode) {
+        let addr = self.resolve_address(mode).0;
+        let data = self.memory.read(addr);
+
+        self.memory.write(addr, if inc { data.wrapping_add(1) } else { data.wrapping_sub(1) });
+    }
+
     /* Increment/decrement operators - INC, INX, INY, DEC, DEX, DEY */
     fn op_incdec(&mut self, data: u8, inc: bool) -> u8 {
-        let result = if inc { data + 1 } else { data - 1 };
+        let result = if inc { data.wrapping_add(1) } else { data.wrapping_sub(1) };
         self.status.set(StatusRegister::ZERO, result == 0);
         self.status.set(StatusRegister::NEGATIVE, result & 0x80 > 0);
 
