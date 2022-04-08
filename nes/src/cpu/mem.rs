@@ -33,7 +33,7 @@ type IORegisters = [u8; 0x0018];
 pub struct CPUMemory {
     pub internal_ram: [u8; 0x0800],
     pub io_registers: IORegisters,
-    pub cartridge_mapper: Box<dyn Mapper>,
+    pub mapper: Box<dyn Mapper<u8, ()>>,
     pub ppu_registers: Option<Rc<RefCell<NESPPU>>>,
 }
 
@@ -61,7 +61,7 @@ impl CPUMemory {
 
         /* Any address 0x4020 - 0xFFFF is handled by a mapper */
         if (addr >= 0x4020) && (addr <= 0xFFFF) {
-            return self.cartridge_mapper.read(addr);
+            return self.mapper.read(addr);
         }
 
         unimplemented!();
@@ -93,7 +93,7 @@ impl CPUMemory {
 
         /* Any address 0x4020 - 0xFFFF is handled by a mapper */
         if (addr >= 0x4020) && (addr <= 0xFFFF) {
-            return self.cartridge_mapper.read(addr);
+            return self.mapper.read(addr);
         }
 
         unimplemented!();
@@ -134,7 +134,7 @@ impl CPUMemory {
 
         /* Any address 0x4020 - 0xFFFF is handled by a mapper */
         if (addr >= 0x4020) && (addr <= 0xFFFF) {
-            return self.cartridge_mapper.write(addr, data);
+            return self.mapper.write(addr, data);
         }
     }
 }

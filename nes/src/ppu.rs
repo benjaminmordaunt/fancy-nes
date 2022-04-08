@@ -7,8 +7,10 @@ use std::{cell::RefCell, rc::Rc};
 /// TODO
 use bitflags::bitflags;
 
+use crate::Mirroring;
 use crate::cpu::NESCpu;
-
+use crate::cpu::mapper::Mapper;
+use crate::cpu::mapper000::PPUMapper000;
 mod PPUAddress {
     pub const PPUCTRL: u16   = 0x2000;
     pub const PPUMASK: u16   = 0x2001;
@@ -132,10 +134,12 @@ pub struct NESPPU {
 
     pub frame: [u8; 61440],  /* A frame, to be rendered when frame_complete is signalled */
     pub frame_ready: bool,
+
+    pub mapper: Box<dyn Mapper<u16, u16>>,
 } 
 
 impl NESPPU {
-    pub fn new(cpu: Rc<RefCell<NESCpu>>) -> Self {
+    pub fn new(mapper_id: usize, cpu: Rc<RefCell<NESCpu>>, mirroring: Mirroring) -> Self {
         Self {
             palette: [0; 32],
             vram: [0; 2048],
@@ -169,7 +173,14 @@ impl NESPPU {
 
             frame: [0; 61440],
             frame_ready: false,
-            cpu
+            cpu,
+
+            mapper: Box::new(
+                match mapper_id {
+                    0 => { PPUMapper000::new(mirroring) }
+                    _ => { unimplemented!() }
+                }
+            )
         }
     }
 
@@ -179,7 +190,7 @@ impl NESPPU {
             // If the mapper returns a word starting with 0x1***, treat *** as an index into PPU RAM.
             0x0000..=0x3EFF => {
                 let word: u16;
-                word = self.cpu.borrow().memory.cartridge_mapper.read_ppu(addr);
+                word = self.mapper.read(addr);
 
                 if word & 0x1000 > 0 {
                     self.vram[word as usize & 0x0FFF]
@@ -200,7 +211,7 @@ impl NESPPU {
     }
 
     fn write(&mut self, addr: u16, data: u8) {
-        self.cpu.borrow_mut().memory.cartridge_mapper.write_ppu(addr, data);
+        self.mapper.write(addr, data);
     }
 
     /// Fetches the address of the tile and attribute data for a given VRAM access

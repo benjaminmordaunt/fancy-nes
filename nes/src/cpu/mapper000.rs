@@ -11,15 +11,18 @@ use super::mapper::Mapper;
 // Most games shouldn't depend on mirrored addresses, so let's
 // hope for the best!
 
-pub struct Mapper000 {
+pub struct CPUMapper000 {
     prg_rom: Vec<u8>,
-    chr_rom: Vec<u8>,  /* The CHR (character) ROM, static graphics tile data */
     prg_ram: [u8; 8192],
+}
+
+pub struct PPUMapper000 {
+    chr_rom: Vec<u8>,  /* The CHR (character) ROM, static graphics tile data */
 
     mirroring: Mirroring,
 }
 
-impl Mapper for Mapper000 {
+impl Mapper<u8, ()> for CPUMapper000 {
     fn read(&self, addr: u16) -> u8 {
         match addr {
             0x6000..=0x7FFF => {
@@ -48,7 +51,7 @@ impl Mapper for Mapper000 {
         }
     }
 
-    fn load_prg_rom(&mut self, rom: &Vec<u8>) {
+    fn load_rom(&mut self, rom: &Vec<u8>) {
         assert!(match rom.capacity() {
             16384 => true,
             32768 => true,
@@ -57,12 +60,14 @@ impl Mapper for Mapper000 {
 
         self.prg_rom = rom.clone();
     }
+}
 
-    fn load_chr_rom(&mut self, rom: &Vec<u8>) {
+impl Mapper<u16, u16> for PPUMapper000 {
+    fn load_rom(&mut self, rom: &Vec<u8>) {
         self.chr_rom = rom.clone();
     }
 
-    fn read_ppu(&self, mut addr: u16) -> u16 {
+    fn read(&self, mut addr: u16) -> u16 {
         match addr {
             0x0000..=0x1FFF => {
                 self.chr_rom[addr as usize] as u16
@@ -87,7 +92,7 @@ impl Mapper for Mapper000 {
         }
     }
 
-    fn write_ppu(&mut self, mut addr: u16, data: u8) -> u16 {
+    fn write(&mut self, mut addr: u16, data: u8) -> u16 {
         match addr {
             0x0000..=0x1FFF => {
                 self.chr_rom[addr as usize] = data;
@@ -109,20 +114,25 @@ impl Mapper for Mapper000 {
             0x3000..=0x3EFF => {
                 0
             }
-            _ => { unreachable!() }
+            _ => { panic!("{:X}", addr) }
         }
     }
 }
 
-impl Mapper000 {
-    pub fn new(mirroring: Mirroring) -> Self {
+impl CPUMapper000 {
+    pub fn new() -> Self {
         Self {
             prg_rom: Vec::new(),
             prg_ram: [0; 8192],
+        }
+    }
+}
 
+impl PPUMapper000 {
+    pub fn new(mirroring: Mirroring) -> Self {
+        Self {
             chr_rom: vec![],
             mirroring
         }
     }
 }
-

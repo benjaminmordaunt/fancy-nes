@@ -8,7 +8,7 @@ use crate::Mirroring;
 use crate::cpu::debug::disasm_6502;
 
 use self::decode::{LUT_6502, Instruction};
-use self::mapper000::Mapper000;
+use self::mapper000::CPUMapper000;
 use self::mem::*;
 
 pub mod decode;
@@ -16,8 +16,8 @@ pub mod debug;
 pub mod mem;
 
 // Mappers
-mod mapper;
-mod mapper000;
+pub mod mapper;
+pub mod mapper000;
 
 /* The BREAK flag(s) is only applicable when the
    status register is pushed to the stack. 
@@ -82,7 +82,7 @@ pub struct NESCpu {
 }
 
 impl NESCpu {
-    pub fn new(mapper_id: usize, mirroring: Mirroring) -> Self {
+    pub fn new(mapper_id: usize) -> Self {
         Self {
             status: StatusRegister::empty(),
             PC: 0, /* given a correct value from the reset method  */
@@ -97,10 +97,10 @@ impl NESCpu {
                 internal_ram: [0; 2048],
                 ppu_registers: None,  // Begin with PPU detached completely detached from the CPU's address space
                 io_registers: [0; 24],
-                cartridge_mapper: Box::new(
+                mapper: Box::new(
                     match mapper_id {
                         0 => {
-                            Mapper000::new(mirroring)
+                            CPUMapper000::new()
                         }
                         _ => unimplemented!()
                     }
