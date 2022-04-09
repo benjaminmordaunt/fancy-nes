@@ -1,11 +1,11 @@
-use std::cell::RefCell;
+use std::cell::{RefCell, Ref};
 use std::fs;
 use std::ops::Index;
 use std::path::PathBuf;
 use std::rc::Rc;
 use clap::{ArgEnum, Parser};
 use nes::cpu::{NESCpu, debug};
-use nes::cpu::debug::disasm_6502;
+use nes::cpu::debug::{disasm_6502, cpu_dump};
 use nes::ppu::NESPPU;
 use nes_platform::debug_view::DebugView;
 use nes_platform::{load_palette, NES_SCREEN_WIDTH, NES_SCREEN_HEIGHT, NES_DEBUGGER_WIDTH, NES_PPU_INFO_HEIGHT};
@@ -161,8 +161,23 @@ fn main() {
         perf_counter_begin = timer_subsystem.performance_counter();
 
         match &cpu_mode {
-            CPUMode::SingleStep => { if should_step { cpu_cell.borrow_mut().tick(); ppu.borrow_mut().ppu_tick(3); should_step = false; } }
-            CPUMode::Continuous => { cpu_cell.borrow_mut().tick(); println!("{}", disasm_6502(cpu_cell.borrow().PC, &cpu_cell.borrow().memory).0); ppu.borrow_mut().ppu_tick(3); }
+            CPUMode::SingleStep => { 
+                if should_step { 
+                    let mut cpu = cpu_cell.borrow_mut();
+                    if let Err(e) = cpu.tick() {
+                        panic!("{}\nError: {}", cpu_dump(cpu), e);
+                    }
+                    ppu.borrow_mut().ppu_tick(3); 
+                    should_step = false; 
+                } 
+            }
+            CPUMode::Continuous => { 
+                let mut cpu = cpu_cell.borrow_mut();
+                if let Err(e) = cpu.tick() {
+                    panic!("{}\nError: {}", cpu_dump(cpu), e);
+                }
+                ppu.borrow_mut().ppu_tick(3); 
+            }
         }
 
         if last_render >= 166666 || force_render {

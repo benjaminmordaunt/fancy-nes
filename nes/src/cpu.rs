@@ -78,7 +78,7 @@ pub struct NESCpu {
 
     pub memory: CPUMemory,
 
-    last_legal_instruction: Option<u16>,
+    pub last_legal_instruction: Option<u16>,
 }
 
 impl NESCpu {
@@ -110,20 +110,14 @@ impl NESCpu {
         }
     }
 
-    pub fn tick(&mut self) {
+    pub fn tick(&mut self) -> Result<(), String> {
         /* Fetch stage */
         let op = self.memory.read(self.PC);
         let instr_opt = LUT_6502.get(&op);
         let instr: &Instruction;
 
         if instr_opt.is_none() {
-            println!("No instruction found for opcode ${:X}", op);
-            if self.last_legal_instruction.is_some() {
-                let pc = self.last_legal_instruction.unwrap();
-                println!("Disasm of previous instruction: ${:X}: {}", pc, disasm_6502(pc, &self.memory).0);
-                println!("PC now at: ${:X}", self.PC);
-            }
-            panic!();
+            return Err(format!("Instruction not recognised: {:X}", op));
         }
 
         instr = instr_opt.unwrap();
@@ -191,6 +185,7 @@ impl NESCpu {
         }
         
         self.PC += self.pc_skip;
+        Ok(())
     }
 
     /* resolve the address presented in the operand in

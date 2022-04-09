@@ -42,13 +42,14 @@ impl Mapper<u8, ()> for CPUMapper000 {
         }
     }
 
-    fn write(&mut self, addr: u16, data: u8) {
+    fn write(&mut self, addr: u16, data: u8) -> Result<(), String> {
         match addr {
             0x6000..=0x7FFF => {
                 self.prg_ram[addr as usize - 0x6000] = data;
             }
             _ => {}
         }
+        Ok(())
     }
 
     fn load_rom(&mut self, rom: &Vec<u8>) {
@@ -92,11 +93,11 @@ impl Mapper<u16, u16> for PPUMapper000 {
         }
     }
 
-    fn write(&mut self, mut addr: u16, data: u8) -> u16 {
+    fn write(&mut self, mut addr: u16, data: u8) -> Result<u16, String> {
         match addr {
             0x0000..=0x1FFF => {
                 self.chr_rom[addr as usize] = data;
-                0
+                Ok(0)
             }
             0x2000..=0x2FFF => {
                 match self.mirroring {
@@ -109,12 +110,12 @@ impl Mapper<u16, u16> for PPUMapper000 {
                     }
                     _ => { unreachable!() }
                 } 
-                0x1000 | (addr - 0x2000)
+                Ok(0x1000 | (addr - 0x2000))
             }
             0x3000..=0x3EFF => {
-                0
+                Ok(0)
             }
-            _ => { panic!("{:X}", addr) }
+            _ => { Err(format!("PPU write attempted at invalid address: ${:X}", addr)) }
         }
     }
 }
