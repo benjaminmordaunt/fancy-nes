@@ -252,9 +252,19 @@ impl NESPPU {
         }
         PPUAddress::PPUDATA => {
             // Just immediately write the data
-            self.write(self.vram_v, data);
+            self.write(self.vram_v & 0x3FFF, data);
+
+            // Perform VRAM addr increment
+            let increment = if self.ppu_ctrl.contains(PPUCTRL::VRAM_INCREMENT) { 32 } else { 1 };
+            self.vram_v += increment;
         }
-        _ => { panic!("{}", addr) }
+        PPUAddress::OAMADDR => {
+            // TODO
+        }
+        PPUAddress::OAMDATA => {
+            // TODO
+        }
+        _ => { panic!("{:#X}", addr) }
         }
     }
 
@@ -273,10 +283,10 @@ impl NESPPU {
             if addr < 0x03F00 {
                 // Update the internal buffer
                 data = self.data_bus_next;
-                self.data_bus_next = self.read(addr);
+                self.data_bus_next = self.read(addr & 0x3FFF);
             } else {
                 // Otherwise, we get palette data via combinatorial logic
-                data = self.read(addr);
+                data = self.read(addr & 0x3FFF);
             }
 
             // Perform VRAM addr increment
@@ -439,6 +449,8 @@ impl NESPPU {
                     self.frame_ready = true;
                 }
             }
+
+            // println!("S: {}, T: {}, v: {:X}", self.scanline, self.tick, self.vram_v);
         }
     }
 }

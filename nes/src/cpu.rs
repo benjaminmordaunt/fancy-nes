@@ -120,7 +120,8 @@ impl NESCpu {
             println!("No instruction found for opcode ${:X}", op);
             if self.last_legal_instruction.is_some() {
                 let pc = self.last_legal_instruction.unwrap();
-                println!("Disasm of previous instruction: ${:X}: {}", pc, disasm_6502(pc, &self.memory).0)
+                println!("Disasm of previous instruction: ${:X}: {}", pc, disasm_6502(pc, &self.memory).0);
+                println!("PC now at: ${:X}", self.PC);
             }
             panic!();
         }
@@ -143,10 +144,10 @@ impl NESCpu {
             "BRK" => self.enter_subroutine(&InterruptType::BRK),
             "BVC" => self.op_branch(StatusRegister::OVERFLOW, false, &instr.mode),
             "BVS" => self.op_branch(StatusRegister::OVERFLOW, true, &instr.mode),
-            "CLC" => self.status.set(StatusRegister::CARRY, false),
-            "CLD" => self.status.set(StatusRegister::DECIMAL_MODE, false),
-            "CLI" => self.status.set(StatusRegister::INTERRUPT_DISABLE, false),
-            "CLV" => self.status.set(StatusRegister::OVERFLOW, false),
+            "CLC" => { self.status.set(StatusRegister::CARRY, false); self.pc_skip = 1; },
+            "CLD" => { self.status.set(StatusRegister::DECIMAL_MODE, false); self.pc_skip = 1; },
+            "CLI" => { self.status.set(StatusRegister::INTERRUPT_DISABLE, false); self.pc_skip = 1; },
+            "CLV" => { self.status.set(StatusRegister::OVERFLOW, false); self.pc_skip = 1; },
             "CMP" => self.op_compare(self.A, &instr.mode),
             "CPX" => self.op_compare(self.X, &instr.mode),
             "CPY" => self.op_compare(self.Y, &instr.mode),
@@ -184,6 +185,7 @@ impl NESCpu {
             "TAY" => self.Y = self.op_transfer_a(self.A, false),
             "TSX" => self.X = self.op_transfer_a(self.SP, false),
             "TXS" => self.SP = self.op_transfer_a(self.X, true),
+            "TXA" => self.A = self.op_transfer_a(self.X, false),
             "TYA" => self.A = self.op_transfer_a(self.Y, false),
             _     => unimplemented!()
         }
@@ -319,6 +321,7 @@ impl NESCpu {
         let (addr, _) = self.resolve_address(mode);
 
         self.PC = addr;
+        self.pc_skip = 0;
     }
 
     /* bit test */
@@ -357,7 +360,10 @@ impl NESCpu {
         let addr = self.resolve_address(mode).0;
         let data = self.memory.read(addr);
 
-        self.memory.write(addr, if inc { data.wrapping_add(1) } else { data.wrapping_sub(1) });
+        let result = if inc { data.wrapping_add(1) } else { data.wrapping_sub(1) };
+        self.memory.write(addr, result);
+        self.status.set(StatusRegister::ZERO, result == 0);
+        self.status.set(StatusRegister::NEGATIVE, result & 0x80 > 0);
     }
 
     /* Increment/decrement operators - INC, INX, INY, DEC, DEX, DEY */
@@ -372,11 +378,11 @@ impl NESCpu {
 
     /* Rotate operators - ROL, ROR */
     fn op_rotate(&mut self, mode: &AddressingMode, left: bool, arith: bool) {
-        let addr = self.resolve_address(mode).0;
-
+        let mut addr: u16 = 0;
         let mut data = if matches!(mode, AddressingMode::Accumulator) {
             self.A
         } else {
+            addr = self.resolve_address(mode).0;
             self.memory.read(addr)
         };
 
@@ -390,7 +396,7 @@ impl NESCpu {
             self.status.set(StatusRegister::CARRY, data & 0x1 > 0);
             data = data.rotate_right(1);
             data = (data & 0b01111111) | (if arith { 0 } else {old_carry << 7});
-            self.status.set(StatusRegister::NEGATIVE, data * 0x80 > 0);
+            self.status.set(StatusRegister::NEGATIVE, data & 0x80 > 0);
         }
 
         if matches!(mode, AddressingMode::Accumulator) {

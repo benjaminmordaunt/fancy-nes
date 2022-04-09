@@ -149,7 +149,7 @@ fn main() {
                 if cycle_time < 560 {
                     std::thread::sleep(std::time::Duration::from_nanos(560 - cycle_time));
                 } else {
-                    //println!("CPU running too slow! (Actual: {}, Target: 560)", cycle_time);
+                    // println!("CPU running too slow! (Actual: {}, Target: 560)", cycle_time);
                 }
 
                 last_render += (perf_freq * 1_000_000) / (perf_counter_end - perf_counter_begin);
@@ -165,7 +165,7 @@ fn main() {
             CPUMode::Continuous => { cpu_cell.borrow_mut().tick(); println!("{}", disasm_6502(cpu_cell.borrow().PC, &cpu_cell.borrow().memory).0); ppu.borrow_mut().ppu_tick(3); }
         }
 
-        if last_render >= 16666 || force_render {
+        if last_render >= 166666 || force_render {
             force_render = false;
 
             // Render a frame at 60fps
@@ -219,11 +219,11 @@ fn main() {
             //     }
             // }
 
-            // {
-            //     let mut canvas = canvas_cell.borrow_mut();
-            //     canvas.set_draw_color(Color::RGBA(0, 0, 0, 255));
-            //     canvas.clear();
-            // }
+            {
+                let mut canvas = canvas_cell.borrow_mut();
+                canvas.set_draw_color(Color::RGBA(0, 0, 0, 255));
+                canvas.clear();
+            }
 
             if show_debugger {
                 {
@@ -293,8 +293,8 @@ fn main() {
                 println!("Updating frame!");
             }
 
-            //canvas_cell.borrow_mut().copy(&nes_texture, None, Some(Rect::new(0, 0, NES_SCREEN_WIDTH, NES_SCREEN_HEIGHT))).unwrap();
-            //canvas_cell.borrow_mut().present();
+            canvas_cell.borrow_mut().copy(&nes_texture, None, Some(Rect::new(0, 0, NES_SCREEN_WIDTH, NES_SCREEN_HEIGHT))).unwrap();
+            canvas_cell.borrow_mut().present();
             last_render = 0;
         }
 
