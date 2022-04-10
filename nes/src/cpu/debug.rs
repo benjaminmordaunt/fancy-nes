@@ -15,10 +15,12 @@ pub fn cpu_dump(cpu: impl Deref<Target = NESCpu>) -> String {
     dump.push_str(format!("CORE DUMPED @ ${:X}\n", cpu.PC).as_str());
     dump.push_str(format!("\tA: {:X}, X: {:X}, Y: {:X}, PC: ${:X}\n", cpu.A, cpu.X, cpu.Y, cpu.PC).as_str());
     if cpu.last_legal_instruction.is_some() {
-        dump.push_str(format!("\tPrevious: {}\n", disasm_6502(cpu.last_legal_instruction.unwrap(), &cpu.memory).0.as_str()).as_str());
+        dump.push_str(format!("\tPrevious: ${:X}: {}\n", 
+            cpu.last_legal_instruction.unwrap(),
+            disasm_6502(cpu.last_legal_instruction.unwrap(), &cpu.memory).0.as_str()).as_str());
     }
     dump.push_str(format!("Stack (descending - {} items)\n", items_on_stack).as_str());
-    for saddr in ((cpu.SP as u16+0x0100)..=0x01FFu16).rev() {
+    for saddr in ((cpu.SP as u16+0x0101)..=0x01FFu16).rev() {
         dump.push_str(format!("${:X}: {:0>2X}\n", saddr, cpu.memory.observe(saddr)).as_str());
     }
 

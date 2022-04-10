@@ -58,7 +58,7 @@
                     "kind": "bin"
                 }
             },
-            "args": ["/Users/benjaminmordaunt/Downloads/Donkey Kong (World) (Rev A).nes", "-p", "/Users/benjaminmordaunt/Downloads/nespalette.pal"],
+            "args": ["/Users/benjaminmordaunt/Downloads/Super Mario Bros (E).nes", "-p", "/Users/benjaminmordaunt/Downloads/nespalette.pal"],
             "cwd": "${workspaceFolder}"
         },
         {
