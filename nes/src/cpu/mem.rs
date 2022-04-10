@@ -109,7 +109,7 @@ impl CPUMemory {
         | (self.read(addr + 1) as u16) << 8
     }
 
-    pub fn write(&mut self, addr: u16, data: u8) {
+    pub fn write(&mut self, addr: u16, data: u8) -> Result<(), String> {
         /* Internal RAM */
         if (addr & 0xF000) < 0x2000 {
             self.internal_ram[(addr & 0x07FF) as usize] = data;
@@ -129,12 +129,14 @@ impl CPUMemory {
 
         /* CPU test mode registers */
         if (addr >= 0x4018) && (addr <= 0x401F) {
-            return;
+            // Nothing
         }
 
         /* Any address 0x4020 - 0xFFFF is handled by a mapper */
         if (addr >= 0x4020) && (addr <= 0xFFFF) {
             return self.mapper.write(addr, data);
         }
+
+        Ok(())
     }
 }

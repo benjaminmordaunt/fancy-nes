@@ -1,11 +1,12 @@
-use std::cell::RefCell;
+use std::cell::{RefCell, Ref};
 use std::fs;
 use std::ops::Index;
 use std::path::PathBuf;
 use std::rc::Rc;
 use clap::{ArgEnum, Parser};
+use nes::cpu::mapper000::CPUMapper000;
 use nes::cpu::{NESCpu, debug};
-use nes::cpu::debug::disasm_6502;
+use nes::cpu::debug::{disasm_6502, cpu_dump};
 use nes::ppu::NESPPU;
 use nes_platform::debug_view::DebugView;
 use nes_platform::{load_palette, NES_SCREEN_WIDTH, NES_SCREEN_HEIGHT, NES_DEBUGGER_WIDTH, NES_PPU_INFO_HEIGHT};
@@ -15,6 +16,7 @@ use sdl2::pixels::{Color, PixelFormatEnum};
 use sdl2::rect::Rect;
 use sdl2::render::{TextureQuery, Texture};
 use sdl2::render::TextureAccess::*;
+use sdl2::timer;
 
 enum CPUMode {
     SingleStep,
@@ -52,6 +54,16 @@ struct Args {
     /// Force a specific region
     #[clap(short, arg_enum)]
     region: Option<Region>,
+}
+
+/* Flush the CPU's wait cycles. Invokes the appropriate number of PPU cycles */
+fn flush_cpu(cpu: Rc<RefCell<NESCpu>>, ppu: Rc<RefCell<NESPPU>>) {
+    while cpu.borrow().wait_cycles > 0 {
+        if let Err(e) = cpu.borrow_mut().tick() {
+            panic!("{}\nError: {}", cpu_dump(cpu.borrow()), e);
+        }
+        ppu.borrow_mut().ppu_tick(3); 
+    }
 }
 
 fn main() {
@@ -96,19 +108,23 @@ fn main() {
     let video_subsystem = sdl_context.video().unwrap();
     let timer_subsystem = sdl_context.timer().unwrap();
 
-    let window = video_subsystem.window("fancy-nes v0.1.0", 
+    let mut window = video_subsystem.window("fancy-nes v0.1.0", 
         NES_SCREEN_WIDTH + (if args.halted_debug { NES_DEBUGGER_WIDTH } else { 0 } ), 
         NES_SCREEN_HEIGHT)
+        .opengl()
         .position_centered()
         .build()
         .unwrap();
 
     let pixel_format = window.window_pixel_format();
 
-    let canvas_cell = Rc::new(RefCell::new(window.into_canvas().build().unwrap()));
+    let canvas_cell = Rc::new(RefCell::new(window.into_canvas()
+        .accelerated()
+        .present_vsync()
+        .build().unwrap()));
 
     let ttf_context = sdl2::ttf::init().map_err(|e| e.to_string()).unwrap();
-    let mut debug_view = DebugView::new(canvas_cell.borrow().texture_creator(), &ttf_context, Rc::clone(&cpu_cell), cpu_cell.borrow().PC);
+    let mut debug_view = DebugView::new(canvas_cell.borrow().texture_creator(), &ttf_context, Rc::clone(&cpu_cell), Rc::clone(&ppu));
 
     // Create the texture and buffer which we will write RGB data into
     let nes_texture_creator = canvas_cell.clone().borrow().texture_creator();
@@ -121,103 +137,117 @@ fn main() {
     // Connect the PPU's registers to the CPU's address space
     cpu_cell.borrow_mut().memory.ppu_registers = Some(ppu.clone());
 
-    let mut last_render: u64 = 0; // Microseconds since last .present()
-    let mut cycle_time: u64 = 0; // Nanoseconds taken in cycle
-    let mut perf_counter_begin: u64 = 0;
-    let mut perf_counter_end: u64 = 0;
-    let mut initial_cycle = true;
-    let perf_freq = timer_subsystem.performance_frequency();
-
     // Illustrate the contents of the four background, and four sprite palettes
     let palette_view_margin = Margin { top: 3, left: 3, ..Margin::default() };
     let palette_margin = Margin { left: 5, ..Margin::default() };
-
-    let mut force_render = true;
 
     // A thread handles emulating the CPU and PPU
     // and removes the overhead of SDL from the mix.
     // This allows us to determine shortfalls in emulator
     // performance separately from those incurred by SDL2.
 
+    // Last update time
+    let mut last_time: u64 = timer_subsystem.performance_counter();
+
     'running: loop {
-        if perf_counter_end != perf_counter_begin { 
-            if !initial_cycle {
-                // The frequency of this part of the loop should be at a fixed ~1.79 MHz.
-                // If we ever drop below that, issue a warning to stdout.
-                // If we're going too fast, delay.
-                cycle_time = (perf_freq * 1_000_000_000) / (perf_counter_end - perf_counter_begin);
-                if cycle_time < 560 {
-                    std::thread::sleep(std::time::Duration::from_nanos(560 - cycle_time));
-                } else {
-                    // println!("CPU running too slow! (Actual: {}, Target: 560)", cycle_time);
+        match &cpu_mode {
+            CPUMode::SingleStep => { 
+                if should_step { 
+                    // In single-step mode, we need to fast-forward the CPU and
+                    // PPU to the next instruction in order to provide "step-over"-like
+                    // functionality in the debugger view.
+
+                    // Perform a single tick anyways
+                    if let Err(e) = cpu_cell.borrow_mut().tick() {
+                        panic!("{}\nError: {}", cpu_dump(cpu_cell.borrow()), e);
+                    }
+                    ppu.borrow_mut().ppu_tick(3);
+
+                    // Flush the pipeline
+                    flush_cpu(Rc::clone(&cpu_cell), Rc::clone(&ppu));
+                    should_step = false; 
+                } 
+            }
+            CPUMode::Continuous => { 
+                {
+                    let mut cpu = cpu_cell.borrow_mut();
+                    if let Err(e) = cpu.tick() {
+                        panic!("{}\nError: {}", cpu_dump(cpu), e);
+                    }
                 }
 
-                last_render += (perf_freq * 1_000_000) / (perf_counter_end - perf_counter_begin);
-            } else {
-                initial_cycle = false;
+                ppu.borrow_mut().ppu_tick(3); 
+
+                // Simple breakpoint mechanism (make this programmable)
+                // if cpu_cell.borrow().PC & 0xFFF0 == 0x8170 {
+                //     // Finish processing this instruction
+                //     flush_cpu(Rc::clone(&cpu_cell), Rc::clone(&ppu));
+
+                //     cpu_mode = CPUMode::SingleStep;
+                //     should_step = false;
+
+                //     show_debugger = true;
+                //     canvas_cell.borrow_mut().window_mut().set_size(NES_SCREEN_WIDTH
+                //         + if show_debugger { NES_DEBUGGER_WIDTH } else { 0 }, 
+                //         NES_SCREEN_HEIGHT
+                //         + if show_ppu_info { NES_PPU_INFO_HEIGHT } else { 0 }).unwrap();
+                // }
             }
         }
 
-        perf_counter_begin = timer_subsystem.performance_counter();
+        let fps = (timer_subsystem.performance_frequency()) / (timer_subsystem.performance_counter() - last_time);
 
-        match &cpu_mode {
-            CPUMode::SingleStep => { if should_step { cpu_cell.borrow_mut().tick(); ppu.borrow_mut().ppu_tick(3); should_step = false; } }
-            CPUMode::Continuous => { cpu_cell.borrow_mut().tick(); println!("{}", disasm_6502(cpu_cell.borrow().PC, &cpu_cell.borrow().memory).0); ppu.borrow_mut().ppu_tick(3); }
-        }
+        // Place a minimum render rate of 30 FPS for when in single-step execution mode.
+        if ppu.borrow().frame_ready || fps < 30 {
+            // Set window title to be the FPS
+            canvas_cell.borrow_mut().window_mut().set_title(format!("fancy-nes v0.1.0 - FPS: {}", fps).as_str()).unwrap();
 
-        if last_render >= 166666 || force_render {
-            force_render = false;
+            last_time = timer_subsystem.performance_counter();
 
-            // Render a frame at 60fps
-            // for event in event_pump.poll_iter() {
-            //     match event {
-            //         Event::Quit {..} |
-            //         Event::KeyDown { keycode: Some(Keycode::Escape), ..} => {
-            //             break 'running
-            //         },
-            //         // Event::KeyDown { keycode: Some(Keycode::Down), ..} => {
-            //         //     if disasm_sel < 25 {
-            //         //         disasm_sel += 1;
-            //         //     }
-            //         // }
-            //         // Event::KeyDown { keycode: Some(Keycode::Up), ..} => {
-            //         //     if disasm_sel > 0 {
-            //         //         disasm_sel -= 1;
-            //         //     }
-            //         // }
-            //         Event::KeyDown { keycode: Some(Keycode::Hash), ..} => {
-            //             show_ppu_info = !show_ppu_info;
+            for event in event_pump.poll_iter() {
+                match event {
+                    Event::Quit {..} |
+                    Event::KeyDown { keycode: Some(Keycode::Escape), ..} => {
+                        break 'running
+                    },
+                    Event::KeyDown { keycode: Some(Keycode::Hash), ..} => {
+                        show_ppu_info = !show_ppu_info;
 
-            //             canvas_cell.borrow_mut().window_mut().set_size(NES_SCREEN_WIDTH
-            //                 + if show_debugger { NES_DEBUGGER_WIDTH } else { 0 }, 
-            //                 NES_SCREEN_HEIGHT
-            //                 + if show_ppu_info { NES_PPU_INFO_HEIGHT } else { 0 }).unwrap();
-            //         }
-            //         Event::KeyDown { keycode: Some(Keycode::Quote), ..} => {
-            //             show_debugger = !show_debugger;
+                        canvas_cell.borrow_mut().window_mut().set_size(NES_SCREEN_WIDTH
+                            + if show_debugger { NES_DEBUGGER_WIDTH } else { 0 }, 
+                            NES_SCREEN_HEIGHT
+                            + if show_ppu_info { NES_PPU_INFO_HEIGHT } else { 0 }).unwrap();
+                    }
+                    Event::KeyDown { keycode: Some(Keycode::Quote), keymod: sdl2::keyboard::Mod::NOMOD, ..} => {
+                        show_debugger = !show_debugger;
 
-            //             canvas_cell.borrow_mut().window_mut().set_size(NES_SCREEN_WIDTH
-            //                 + if show_debugger { NES_DEBUGGER_WIDTH } else { 0 }, 
-            //                 NES_SCREEN_HEIGHT
-            //                 + if show_ppu_info { NES_PPU_INFO_HEIGHT } else { 0 }).unwrap();
-            //         }
-            //         Event::KeyDown { keycode: Some(Keycode::Right), keymod: sdl2::keyboard::Mod::LALTMOD, ..} => {
-            //             if palette_selected < 7 {
-            //                 palette_selected +=  1;
-            //             }
-            //         }
-            //         Event::KeyDown { keycode: Some(Keycode::Left), keymod: sdl2::keyboard::Mod::LALTMOD, ..} => {
-            //             if palette_selected > 0 {
-            //                 palette_selected -=  1;
-            //             }
-            //         }
-            //         Event::KeyDown { keycode: Some(Keycode::N), ..} => {
-            //             should_step = true;
-            //             force_render = true;
-            //         }
-            //         _ => {}
-            //     }
-            // }
+                        canvas_cell.borrow_mut().window_mut().set_size(NES_SCREEN_WIDTH
+                            + if show_debugger { NES_DEBUGGER_WIDTH } else { 0 }, 
+                            NES_SCREEN_HEIGHT
+                            + if show_ppu_info { NES_PPU_INFO_HEIGHT } else { 0 }).unwrap();
+                    }
+                    Event::KeyDown { keycode: Some(Keycode::Quote), keymod: sdl2::keyboard::Mod::LALTMOD, ..} => {
+                        cpu_mode = match cpu_mode {
+                            CPUMode::SingleStep => CPUMode::Continuous,
+                            CPUMode::Continuous => CPUMode::SingleStep,
+                        }
+                    }
+                    Event::KeyDown { keycode: Some(Keycode::Right), keymod: sdl2::keyboard::Mod::LALTMOD, ..} => {
+                        if palette_selected < 7 {
+                            palette_selected +=  1;
+                        }
+                    }
+                    Event::KeyDown { keycode: Some(Keycode::Left), keymod: sdl2::keyboard::Mod::LALTMOD, ..} => {
+                        if palette_selected > 0 {
+                            palette_selected -=  1;
+                        }
+                    }
+                    Event::KeyDown { keycode: Some(Keycode::N), ..} => {
+                        should_step = true;
+                    }
+                    _ => {}
+                }
+            }
 
             {
                 let mut canvas = canvas_cell.borrow_mut();
@@ -227,13 +257,6 @@ fn main() {
 
             if show_debugger {
                 {
-                    let pos = debug_view.addresses.iter().position(|x| *x == cpu_cell.borrow().PC);
-                    if pos.is_none() {
-                        panic!("Queried address not present in disasssembler. Did scrolling fail?");
-                    } else {
-                        debug_view.selected_entry = pos.unwrap();
-                    }
-    
                     let canvas = canvas_cell.borrow_mut();
                     debug_view.render(canvas);
                 }
@@ -274,30 +297,24 @@ fn main() {
                 }
             }
 
-            if ppu.borrow().frame_ready {
-                // Render the complete image (this will not work for ROMs which change mid-frame)
-                let mut tex_raw: [u8; 61440*4] = [0; 61440*4];
-                
-                for y in 0..240 {
-                    for x in 0..256 {
-                        tex_raw[x * 4 + y * 256 * 4] = 0xFF; // Opaque
-                        (tex_raw[x * 4 + 1 + y * 256 * 4],
-                            tex_raw[x * 4 + 2 + y * 256 * 4],
-                            tex_raw[x * 4 + 3 + y * 256 * 4])
-                            = palette[ppu.borrow().frame[x + y * 256] as usize].rgb();
-                    }
+            // Render the complete image
+            let mut tex_raw: [u8; 61440*4] = [0; 61440*4];
+            
+            for y in 0..240 {
+                for x in 0..256 {
+                    tex_raw[x * 4 + y * 256 * 4] = 0xFF; // Opaque
+                    (tex_raw[x * 4 + 1 + y * 256 * 4],
+                        tex_raw[x * 4 + 2 + y * 256 * 4],
+                        tex_raw[x * 4 + 3 + y * 256 * 4])
+                        = palette[ppu.borrow().frame[x + y * 256] as usize].rgb();
                 }
-                
-                nes_texture.update(Rect::new(0, 0, 256, 240), &tex_raw, 4 * 256).unwrap();
-                ppu.borrow_mut().frame_ready = false;
-                println!("Updating frame!");
             }
+            
+            nes_texture.update(Rect::new(0, 0, 256, 240), &tex_raw, 4 * 256).unwrap();
+            ppu.borrow_mut().frame_ready = false;
 
             canvas_cell.borrow_mut().copy(&nes_texture, None, Some(Rect::new(0, 0, NES_SCREEN_WIDTH, NES_SCREEN_HEIGHT))).unwrap();
             canvas_cell.borrow_mut().present();
-            last_render = 0;
         }
-
-        perf_counter_end = timer_subsystem.performance_counter();
     }
 }

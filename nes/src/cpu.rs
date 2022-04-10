@@ -27,7 +27,7 @@ pub mod mapper000;
    because an NMI can fire during BRK vector routine
    (not emulated). BREAK_HIGH is always 1. */
 bitflags! {
-    struct StatusRegister: u8 {
+    pub struct StatusRegister: u8 {
         const CARRY             = 0b00000001;
         const ZERO              = 0b00000010;
         const INTERRUPT_DISABLE = 0b00000100;
@@ -64,21 +64,22 @@ pub enum AddressingMode {
 }
 
 pub struct NESCpu {
-    status: StatusRegister,
+    pub status: StatusRegister,
     pub PC: u16,    /* program counter */
-    SP: u8,     /* stack pointer */
-    A: u8,      /* accumulator */
-    X: u8,      /* index register X */
-    Y: u8,      /* index register Y */
+    pub SP: u8,     /* stack pointer */
+    pub A: u8,      /* accumulator */
+    pub X: u8,      /* index register X */
+    pub Y: u8,      /* index register Y */
 
     /* instructions */
     target_address: u16,  /* "address" dumped straight from operand */
-    wait_cycles: u8,      /* pending wait cycles */
+    pub wait_cycles: u8,      /* pending wait cycles */
     pc_skip: u16,     /* how many bytes to advance the PC by for a given instr. */
 
     pub memory: CPUMemory,
 
-    last_legal_instruction: Option<u16>,
+    pub last_legal_instruction: Option<u16>,
+    pub do_nmi: bool,
 }
 
 impl NESCpu {
@@ -107,23 +108,30 @@ impl NESCpu {
                 )
             },
             last_legal_instruction: None,
+            do_nmi: false,
         }
     }
 
-    pub fn tick(&mut self) {
+    pub fn tick(&mut self) -> Result<(), String> {
+        /* NMI takes priority */
+        if self.do_nmi {
+            self.nmi();
+            self.do_nmi = false;
+        }
+
+        /* If there are outstanding wait cycles, do nothing */
+        if self.wait_cycles > 0 {
+            self.wait_cycles -= 1;
+            return Ok(());
+        }
+
         /* Fetch stage */
         let op = self.memory.read(self.PC);
         let instr_opt = LUT_6502.get(&op);
         let instr: &Instruction;
 
         if instr_opt.is_none() {
-            println!("No instruction found for opcode ${:X}", op);
-            if self.last_legal_instruction.is_some() {
-                let pc = self.last_legal_instruction.unwrap();
-                println!("Disasm of previous instruction: ${:X}: {}", pc, disasm_6502(pc, &self.memory).0);
-                println!("PC now at: ${:X}", self.PC);
-            }
-            panic!();
+            return Err(format!("Instruction not recognised: {:X}", op));
         }
 
         instr = instr_opt.unwrap();
@@ -141,7 +149,7 @@ impl NESCpu {
             "BMI" => self.op_branch(StatusRegister::NEGATIVE, true, &instr.mode),
             "BNE" => self.op_branch(StatusRegister::ZERO, false, &instr.mode),
             "BPL" => self.op_branch(StatusRegister::NEGATIVE, false, &instr.mode),
-            "BRK" => self.enter_subroutine(&InterruptType::BRK),
+            "BRK" => self.enter_subroutine(&InterruptType::BRK)?,
             "BVC" => self.op_branch(StatusRegister::OVERFLOW, false, &instr.mode),
             "BVS" => self.op_branch(StatusRegister::OVERFLOW, true, &instr.mode),
             "CLC" => { self.status.set(StatusRegister::CARRY, false); self.pc_skip = 1; },
@@ -159,7 +167,7 @@ impl NESCpu {
             "INX" => self.X = self.op_incdec(self.X, true),
             "INY" => self.Y = self.op_incdec(self.Y, true),
             "JMP" => self.op_jump(&instr.mode),
-            "JSR" => self.enter_subroutine(&InterruptType::SUBROUTINE),
+            "JSR" => self.enter_subroutine(&InterruptType::SUBROUTINE)?,
             "LDA" => self.A = self.op_load(&instr.mode),
             "LDX" => self.X = self.op_load(&instr.mode),
             "LDY" => self.Y = self.op_load(&instr.mode),
@@ -189,8 +197,13 @@ impl NESCpu {
             "TYA" => self.A = self.op_transfer_a(self.Y, false),
             _     => unimplemented!()
         }
-        
+
+        /* Set base number of idle cycles for this instruction.
+           Some instructions will have this increased by 1 for a page cross. */
+        self.wait_cycles = instr.cycles;
+
         self.PC += self.pc_skip;
+        Ok(())
     }
 
     /* resolve the address presented in the operand in
@@ -248,7 +261,7 @@ impl NESCpu {
             }
             AddressingMode::Indirect => {
                 let addr_lsb: u8 = self.memory.read(self.target_address);
-                let addr_msb: u8 = self.memory.read((self.target_address + 1) & 0xFF00);
+                let addr_msb: u8 = self.memory.read(self.target_address + 1);
 
                  /* An original 6502 has does not correctly fetch 
                     the target address if the indirect vector falls on a page boundary (e.g. $xxFF where 
@@ -260,7 +273,7 @@ impl NESCpu {
                 if addr_lsb == 0xFF {
                     println!("Indirect JMP at ${:X} falls at end of page. Using \"broken\" behaviour.", &self.PC);
                 }
-                return (addr_lsb as u16 + (addr_msb as u16) << 4, false);
+                return (addr_lsb as u16 | ((addr_msb as u16) << 8), false);
             }
             AddressingMode::IndexedIndirect => {
                 let zp_addr: u16 = self.target_address + self.X as u16;
@@ -401,6 +414,7 @@ impl NESCpu {
 
         if matches!(mode, AddressingMode::Accumulator) {
             self.A = data;
+            self.pc_skip = 1;
         } else {
             self.memory.write(addr, data);
         }
@@ -442,7 +456,7 @@ impl NESCpu {
     }
 
     fn op_stack_pull(&mut self, status: bool) -> u8 {
-        self.SP -= 1;
+        self.SP += 1;
         self.pc_skip = 1;
         if status {
             return self.memory.read(self.SP as u16 + 0x0100);
@@ -455,27 +469,46 @@ impl NESCpu {
     }
 
     /* branch to interrupt or subroutine */
-    fn enter_subroutine(&mut self, inttype: &InterruptType) {
+    fn enter_subroutine(&mut self, inttype: &InterruptType) -> Result<(), String> {
         
         /* if we've ended up here to do an IRQ service when
            interrupt disable is set, do nothing */
         if matches!(inttype, InterruptType::IRQ) && self.status.contains(StatusRegister::INTERRUPT_DISABLE) {
-            return;
+            return Ok(());
         }
 
-        /* if a software BRK has been called, allow for single
-           byte patching by setting the stacked address to the one subsequent */
-        if matches!(inttype, InterruptType::BRK) {
-            self.PC += 1;
+        match inttype {
+            /* if a software BRK has been called, allow for single
+               byte patching by setting the stacked address to the one subsequent */
+            InterruptType::BRK => {
+                self.PC += 1;
+            }
+
+            /* JSR is 3 bytes long, we need to push the last byte 
+               to the stack. */
+            InterruptType::SUBROUTINE => {
+                self.PC += 2;
+            }
+
+            _ => {}
         }
 
         self.memory.write(self.SP as u16 + 0x0100, (self.PC >> 8) as u8); /* PC, MSB */
-        self.SP -= 1;
+        if let Some(i) = self.SP.checked_sub(1) {
+            self.SP = i;
+        } else {
+            return Err("Stack underflow occurred".to_string());
+        }
         self.memory.write(self.SP as u16 + 0x0100, self.PC as u8); /* PC, LSB */
-        self.SP -= 1;
+        if let Some(i) = self.SP.checked_sub(1) {
+            self.SP = i;
+        } else {
+            return Err("Stack underflow occurred".to_string());
+        }
+        
         match inttype {
             InterruptType::SUBROUTINE => {
-                self.PC = self.memory.read_16(self.PC + 1);
+                self.PC = self.memory.read_16(self.PC - 1);
             },
             InterruptType::BRK => {
                 self.status.insert(StatusRegister::BREAK_LOW);
@@ -501,6 +534,8 @@ impl NESCpu {
         }
 
         self.pc_skip = 0;
+
+        Ok(())
     }
 
     /* return from a subroutine or interrupt */
@@ -523,8 +558,15 @@ impl NESCpu {
         self.SP += 1;
         pc |= (self.memory.read(self.SP as u16 + 0x0100) as u16) << 8;
 
-        /* Actually start at the next instruction */
-        pc += 1;
+        /* Actually start at the next instruction, unless this is an RTI */
+        match inttype {
+            InterruptType::BRK
+            | InterruptType::SUBROUTINE => {
+                pc += 1;
+            }
+            _ => {}
+        }
+        
         self.PC = pc;
 
         self.pc_skip = 0;
@@ -539,6 +581,7 @@ impl NESCpu {
 
     /* Handle the NMI (non-maskable interrupt) - called primarily by the PPU */
     pub fn nmi(&mut self) {
+        self.wait_cycles = 6; /* NMI takes 7 cycles */
         self.enter_subroutine(&InterruptType::NMI);
     }
 }

@@ -1,9 +1,31 @@
+use std::cell::Ref;
+use std::ops::Deref;
+
 use crate::cpu::decode::{LUT_6502, Instruction};
 
 /// Provide the facilities necessary for the nes-platform
 /// crate to generate a disasm view of the current NES PRG.
 
-use super::{AddressingMode, mem::CPUMemory};
+use super::{AddressingMode, mem::CPUMemory, NESCpu};
+
+pub fn cpu_dump(cpu: impl Deref<Target = NESCpu>) -> String {
+    let mut dump: String = String::new();
+    let items_on_stack = 0xFF - cpu.SP;
+
+    dump.push_str(format!("CORE DUMPED @ ${:X}\n", cpu.PC).as_str());
+    dump.push_str(format!("\tA: {:X}, X: {:X}, Y: {:X}, PC: ${:X}\n", cpu.A, cpu.X, cpu.Y, cpu.PC).as_str());
+    if cpu.last_legal_instruction.is_some() {
+        dump.push_str(format!("\tPrevious: ${:X}: {}\n", 
+            cpu.last_legal_instruction.unwrap(),
+            disasm_6502(cpu.last_legal_instruction.unwrap(), &cpu.memory).0.as_str()).as_str());
+    }
+    dump.push_str(format!("Stack (descending - {} items)\n", items_on_stack).as_str());
+    for saddr in ((cpu.SP as u16+0x0101)..=0x01FFu16).rev() {
+        dump.push_str(format!("${:X}: {:0>2X}\n", saddr, cpu.memory.observe(saddr)).as_str());
+    }
+
+    dump
+}
 
 // Returns the string of disassembly, as well as the address delta to the next
 // instruction.

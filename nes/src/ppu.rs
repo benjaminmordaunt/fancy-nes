@@ -88,7 +88,7 @@ pub struct NESPPU {
 
     write_toggle: bool, /* The latch shared by $2005, $2006 to distinguish 
                           between first and second writes. */
-    scanline: u16,      /* The next scanline to be rendered (0-261 NTSC) */
+    pub scanline: u16,      /* The next scanline to be rendered (0-261 NTSC) */
 
     /* Note that the vram_v and vram_t are organised as follows:
         yyy NN YYYYY XXXXX
@@ -108,7 +108,7 @@ pub struct NESPPU {
     /* End PPU registers */
 
     addr_data_bus: u16,  /* The PPU uses the same bus for addr and data to save pins */
-    tick: u16,           /* The tick on the current scanline (0-indexed) */
+    pub tick: u16,           /* The tick on the current scanline (0-indexed) */
 
     bg_pattern_shift_reg_hi: u16,  /* Background pattern table shift registers */
     bg_pattern_shift_reg_lo: u16,
@@ -211,7 +211,12 @@ impl NESPPU {
     }
 
     fn write(&mut self, addr: u16, data: u8) {
-        self.mapper.write(addr, data);
+        match addr {
+            0x3F00..=0x3FFF => {
+                self.palette[(addr & 0x1F) as usize] = data;
+            }
+            _ => { self.mapper.write(addr, data); }
+        }
     }
 
     /// Fetches the address of the tile and attribute data for a given VRAM access
@@ -226,6 +231,8 @@ impl NESPPU {
         PPUAddress::PPUCTRL => {
             // Populate lo-nybble of high byte of base nametable address
             self.vram_t = (self.vram_t & 0xF3FF) | ((data as u16 & 0x3) << 10);
+
+            self.ppu_ctrl = PPUCTRL::from_bits_truncate(data);
         }
         PPUAddress::PPUMASK => {
             // TODO: Implement background and sprite hiding in the leftmost 8 pixels + colour emphasis
@@ -406,7 +413,7 @@ impl NESPPU {
                     if self.scanline == 241 && self.tick == 1 {
                         self.ppu_status.insert(PPUSTATUS::VBLANK);
                         if self.ppu_ctrl.contains(PPUCTRL::NMI_ENABLED) {
-                            self.cpu.borrow_mut().nmi();
+                            self.cpu.borrow_mut().do_nmi = true;
                         }
                     }
                 }
