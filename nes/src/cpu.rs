@@ -63,7 +63,7 @@ pub enum AddressingMode {
     IndirectIndexed,
 }
 
-pub struct NESCpu {
+pub struct NESCpu<'a> {
     pub status: StatusRegister,
     pub PC: u16,    /* program counter */
     pub SP: u8,     /* stack pointer */
@@ -76,14 +76,14 @@ pub struct NESCpu {
     pub wait_cycles: u8,      /* pending wait cycles */
     pc_skip: u16,     /* how many bytes to advance the PC by for a given instr. */
 
-    pub memory: CPUMemory,
+    pub memory: CPUMemory<'a>,
 
     pub last_legal_instruction: Option<u16>,
     pub do_nmi: bool,
 }
 
-impl NESCpu {
-    pub fn new(mapper_id: usize) -> Self {
+impl<'a> NESCpu<'a> {
+    pub fn new(mapper_id: usize, joy1_in: &'a RefCell<u8>) -> Self {
         Self {
             status: StatusRegister::empty(),
             PC: 0, /* given a correct value from the reset method  */
@@ -103,9 +103,11 @@ impl NESCpu {
                         0 => {
                             CPUMapper000::new()
                         }
-                        _ => unimplemented!()
+                        _ => panic!("Unimplemented mapper: {}", mapper_id)
                     }
-                )
+                ),
+                joy1_in,
+                joy_freeze: false,
             },
             last_legal_instruction: None,
             do_nmi: false,
@@ -261,7 +263,9 @@ impl NESCpu {
             }
             AddressingMode::Indirect => {
                 let addr_lsb: u8 = self.memory.read(self.target_address);
-                let addr_msb: u8 = self.memory.read(self.target_address + 1);
+                let addr_msb: u8 = self.memory.read(
+                    self.target_address & 0xFF00 | 
+                    (self.target_address + 1) & 0x00FF); // See notes below
 
                  /* An original 6502 has does not correctly fetch 
                     the target address if the indirect vector falls on a page boundary (e.g. $xxFF where 
@@ -270,7 +274,7 @@ impl NESCpu {
                     for compatibility always ensure the indirect vector is not at the end of the page.
                  */
                 #[cfg(debug_assertions)]
-                if addr_lsb == 0xFF {
+                if (self.target_address + 1) & 0x00FF == 0x0000 {
                     println!("Indirect JMP at ${:X} falls at end of page. Using \"broken\" behaviour.", &self.PC);
                 }
                 return (addr_lsb as u16 | ((addr_msb as u16) << 8), false);

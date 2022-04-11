@@ -30,14 +30,16 @@ type IORegisters = [u8; 0x0018];
     /* JOY1 */
     /* JOY2 */
 
-pub struct CPUMemory {
+pub struct CPUMemory<'a> {
     pub internal_ram: [u8; 0x0800],
     pub io_registers: IORegisters,
     pub mapper: Box<dyn Mapper<u8, ()>>,
-    pub ppu_registers: Option<Rc<RefCell<NESPPU>>>,
+    pub ppu_registers: Option<Rc<RefCell<NESPPU<'a>>>>,
+    pub joy1_in: &'a RefCell<u8>,
+    pub joy_freeze: bool,
 }
 
-impl CPUMemory {
+impl<'a> CPUMemory<'a> {
     pub fn read(&mut self, addr: u16) -> u8 {
         /* Internal RAM */
         if (addr & 0xF000) < 0x2000 {
@@ -51,7 +53,16 @@ impl CPUMemory {
 
         /* APU and I/O */
         if (addr >= 0x4000) && (addr <= 0x4017) {
-            return self.io_registers[(addr - 0x4000) as usize];
+            let data: u8;
+
+            if addr == 0x4016 { /* JOY1 */
+                // Return and shift the controller shift register
+                data = self.io_registers[(addr - 0x4000) as usize] & 0x1;
+                if !self.joy_freeze {
+                    self.io_registers[(addr - 0x4000) as usize] >>= 1;
+                }
+            } else { data = 0; }
+            return data;
         }
 
         /* CPU test mode registers */
@@ -122,8 +133,17 @@ impl CPUMemory {
         }
 
         /* APU and I/O */
-        /* TODO - in reality these are PPU mapped and take effect */
         if (addr >= 0x4000) && (addr <= 0x4017) {
+            if addr == 0x4016 {
+                if data & 0x1 == 0x1 {
+                    // Reload the controller(s) shift registers
+                    self.joy_freeze = true;
+                    self.io_registers[0x16] = *self.joy1_in.borrow(); 
+                } else {
+                    // Unfreeze the shift registers to allow program to query buttons
+                    self.joy_freeze = false;
+                }
+            }
             self.io_registers[(addr - 0x4000) as usize] = data;
         }
 

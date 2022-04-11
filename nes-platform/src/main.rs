@@ -13,7 +13,7 @@ use nes_platform::{load_palette, NES_SCREEN_WIDTH, NES_SCREEN_HEIGHT, NES_DEBUGG
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::{Color, PixelFormatEnum};
-use sdl2::rect::Rect;
+use sdl2::rect::{Rect, Point};
 use sdl2::render::{TextureQuery, Texture};
 use sdl2::render::TextureAccess::*;
 use sdl2::timer;
@@ -78,9 +78,12 @@ fn main() {
 
     let nes_rom = fs::read(args.rom).unwrap();
     let nes_rom_header = nes::NESHeaderMetadata::parse_header(&nes_rom).unwrap();
+
+    // Controller status
+    let mut joy1 = RefCell::new(0 as u8);
     
     // Load the PRG and CHR roms
-    let cpu_cell = Rc::new(RefCell::new(NESCpu::new(nes_rom_header.mapper_id as usize)));
+    let cpu_cell = Rc::new(RefCell::new(NESCpu::new(nes_rom_header.mapper_id as usize, &joy1)));
     let mut ppu = Rc::new(RefCell::new(NESPPU::new(nes_rom_header.mapper_id as usize, Rc::clone(&cpu_cell), nes_rom_header.hardwired_mirroring)));
 
     let mut prg_rom_data = vec![0; nes_rom_header.prg_rom_size as usize];
@@ -129,7 +132,7 @@ fn main() {
     // Create the texture and buffer which we will write RGB data into
     let nes_texture_creator = canvas_cell.clone().borrow().texture_creator();
     let mut nes_texture: Texture = nes_texture_creator
-        .create_texture(None, Streaming, 246, 240)
+        .create_texture_streaming(PixelFormatEnum::RGB24, 256, 240)
         .unwrap();
 
     let mut event_pump = sdl_context.event_pump().unwrap();
@@ -179,19 +182,19 @@ fn main() {
                 ppu.borrow_mut().ppu_tick(3); 
 
                 // Simple breakpoint mechanism (make this programmable)
-                // if cpu_cell.borrow().PC & 0xFFF0 == 0x8170 {
-                //     // Finish processing this instruction
-                //     flush_cpu(Rc::clone(&cpu_cell), Rc::clone(&ppu));
+                if cpu_cell.borrow().PC & 0xFFFF == 32898 {
+                    // Finish processing this instruction
+                    flush_cpu(Rc::clone(&cpu_cell), Rc::clone(&ppu));
 
-                //     cpu_mode = CPUMode::SingleStep;
-                //     should_step = false;
+                    cpu_mode = CPUMode::SingleStep;
+                    should_step = false;
 
-                //     show_debugger = true;
-                //     canvas_cell.borrow_mut().window_mut().set_size(NES_SCREEN_WIDTH
-                //         + if show_debugger { NES_DEBUGGER_WIDTH } else { 0 }, 
-                //         NES_SCREEN_HEIGHT
-                //         + if show_ppu_info { NES_PPU_INFO_HEIGHT } else { 0 }).unwrap();
-                // }
+                    show_debugger = true;
+                    canvas_cell.borrow_mut().window_mut().set_size(NES_SCREEN_WIDTH
+                        + if show_debugger { NES_DEBUGGER_WIDTH } else { 0 }, 
+                        NES_SCREEN_HEIGHT
+                        + if show_ppu_info { NES_PPU_INFO_HEIGHT } else { 0 }).unwrap();
+                }
             }
         }
 
@@ -245,9 +248,88 @@ fn main() {
                     Event::KeyDown { keycode: Some(Keycode::N), ..} => {
                         should_step = true;
                     }
+
+                    // Controller Port 1 BEGIN
+                    /* A */
+                    Event::KeyDown { keycode: Some(Keycode::Z), ..} => {
+                        *joy1.borrow_mut() |= 1 << 0;
+                    }
+                    Event::KeyUp { keycode: Some(Keycode::Z), ..} => {
+                        *joy1.borrow_mut() &= !(1 << 0);
+                    }
+
+                    /* B */
+                    Event::KeyDown { keycode: Some(Keycode::X), ..} => {
+                        *joy1.borrow_mut() |= 1 << 1;
+                    }
+                    Event::KeyUp { keycode: Some(Keycode::X), ..} => {
+                        *joy1.borrow_mut() &= !(1 << 1);
+                    }
+
+                    /* Select */
+                    Event::KeyDown { keycode: Some(Keycode::RShift), ..} => {
+                        *joy1.borrow_mut() |= 1 << 2;
+                    }
+                    Event::KeyUp { keycode: Some(Keycode::RShift), ..} => {
+                        *joy1.borrow_mut() &= !(1 << 2);
+                    }
+
+                    /* Start */
+                    Event::KeyDown { keycode: Some(Keycode::Return), ..} => {
+                        *joy1.borrow_mut() |= 1 << 3;
+                    }
+                    Event::KeyUp { keycode: Some(Keycode::Return), ..} => {
+                        *joy1.borrow_mut() &= !(1 << 3);
+                    }
+
+                    /* Up */
+                    Event::KeyDown { keycode: Some(Keycode::Up), ..} => {
+                        *joy1.borrow_mut() |= 1 << 4;
+                    }
+                    Event::KeyUp { keycode: Some(Keycode::Up), ..} => {
+                        *joy1.borrow_mut() &= !(1 << 4);
+                    }
+
+                    /* Down */
+                    Event::KeyDown { keycode: Some(Keycode::Down), ..} => {
+                        *joy1.borrow_mut() |= 1 << 5;
+                    }
+                    Event::KeyUp { keycode: Some(Keycode::Down), ..} => {
+                        *joy1.borrow_mut() &= !(1 << 5);
+                    }
+
+                    /* Left */
+                    Event::KeyDown { keycode: Some(Keycode::Left), keymod: sdl2::keyboard::Mod::NOMOD, ..} => {
+                        *joy1.borrow_mut() |= 1 << 6;
+                    }
+                    Event::KeyUp { keycode: Some(Keycode::Left), keymod: sdl2::keyboard::Mod::NOMOD, ..} => {
+                        *joy1.borrow_mut() &= !(1 << 6);
+                    }
+
+                    /* Right */
+                    Event::KeyDown { keycode: Some(Keycode::Right), ..} => {
+                        *joy1.borrow_mut() |= 1 << 4;
+                    }
+                    Event::KeyUp { keycode: Some(Keycode::Right), ..} => {
+                        *joy1.borrow_mut() &= !(1 << 4);
+                    }
+                    // Controller Port 1 END
                     _ => {}
                 }
             }
+
+            // Render the complete image
+            nes_texture.with_lock(None, |r, p| {
+                for y in 0..240 {
+                    for x in 0..256 {
+                        let offset = y * p + x * 3;
+                        let color = palette[ppu.borrow().frame[(y * 256 + x) as usize] as usize];
+                        r[offset + 0] = color.r;  // R
+                        r[offset + 1] = color.g;  // G
+                        r[offset + 2] = color.b;  // B
+                    }
+                }
+            }).unwrap();
 
             {
                 let mut canvas = canvas_cell.borrow_mut();
@@ -294,23 +376,45 @@ fn main() {
                             color_idx += 1;
                         }
                     });
+
+                    // Draw the two pattern tables
+                    canvas.set_draw_color(Color::RGBA(255, 255, 255, 255));
+                    canvas.draw_rects(&(0..2).into_iter().map(|v| {
+                        Rect::new(palette_view_margin.left as i32 + 128 * v + palette_margin.left as i32 * v,
+                            (NES_SCREEN_HEIGHT + palette_view_margin.top * 2 + 14) as i32, 130, 130)
+                    }).collect::<Vec<Rect>>()).unwrap();
+
+                    {
+                        let p_ppu = ppu.borrow();
+
+                        for table in 0..2 {
+                            for tile_row in 0..16 {
+                                for tile_col in 0..16 {
+                                    for fine_y in 0..8 {
+                                        let lsb_addr: u16 = ((table << 12) | (tile_row << 8) | (tile_col << 4) | fine_y) as u16;
+
+                                        let px_color_lsb = p_ppu.read(lsb_addr);
+                                        let px_color_msb = p_ppu.read(lsb_addr + 8);
+
+                                        for pxidx in 0..8 {
+                                            let px_color = (((px_color_msb & (0x80 >> pxidx) > 1) as u8) << 1) | ((px_color_lsb & (0x80 >> pxidx) > 1) as u8);
+                                            let px_color_pal = p_ppu.read(0x3F00 + px_color as u16);
+
+                                            println!("{}", px_color_pal);
+                                            canvas.set_draw_color(palette[px_color_pal as usize]);
+                                            canvas.draw_point(Point::new(
+                                                (palette_view_margin.left as i32) + 128i32 * (table as i32) + palette_margin.left as i32 * table as i32 + (pxidx * tile_col) as i32 + 1,
+                                                (NES_SCREEN_HEIGHT + palette_view_margin.top) as i32 * 2 + 15 + (fine_y * tile_row) as i32
+                                            )).unwrap();
+                                        }
+                                    }
+                                }
+                            }
+                        }   
+                    }
                 }
             }
 
-            // Render the complete image
-            let mut tex_raw: [u8; 61440*4] = [0; 61440*4];
-            
-            for y in 0..240 {
-                for x in 0..256 {
-                    tex_raw[x * 4 + y * 256 * 4] = 0xFF; // Opaque
-                    (tex_raw[x * 4 + 1 + y * 256 * 4],
-                        tex_raw[x * 4 + 2 + y * 256 * 4],
-                        tex_raw[x * 4 + 3 + y * 256 * 4])
-                        = palette[ppu.borrow().frame[x + y * 256] as usize].rgb();
-                }
-            }
-            
-            nes_texture.update(Rect::new(0, 0, 256, 240), &tex_raw, 4 * 256).unwrap();
             ppu.borrow_mut().frame_ready = false;
 
             canvas_cell.borrow_mut().copy(&nes_texture, None, Some(Rect::new(0, 0, NES_SCREEN_WIDTH, NES_SCREEN_HEIGHT))).unwrap();
