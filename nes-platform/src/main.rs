@@ -1,15 +1,15 @@
 use std::cell::{RefCell, Ref};
 use std::fs;
 use std::ops::Index;
-use std::path::PathBuf;
+use std::path::{PathBuf, Path};
 use std::rc::Rc;
 use clap::{ArgEnum, Parser};
-use nes::cpu::mapper000::CPUMapper000;
+use nes::cpu::trace::TraceUnit;
 use nes::cpu::{NESCpu, debug};
 use nes::cpu::debug::{disasm_6502, cpu_dump};
 use nes::ppu::NESPPU;
 use nes_platform::debug_view::DebugView;
-use nes_platform::{load_palette, NES_SCREEN_WIDTH, NES_SCREEN_HEIGHT, NES_DEBUGGER_WIDTH, NES_PPU_INFO_HEIGHT};
+use nes_platform::{load_palette, NES_SCREEN_WIDTH, NES_SCREEN_HEIGHT, NES_DEBUGGER_WIDTH, NES_PPU_INFO_HEIGHT, NES_PPU_INFO_WIDTH};
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::{Color, PixelFormatEnum};
@@ -17,6 +17,10 @@ use sdl2::rect::{Rect, Point};
 use sdl2::render::{TextureQuery, Texture};
 use sdl2::render::TextureAccess::*;
 use sdl2::timer;
+
+// Ensure that we aren't trying to use 2 different trace styles
+#[cfg(all(feature = "fceux-log", feature = "nestest-log"))]
+compile_error!("feature \"fceux-log\" and features \"nestest-log\" cannot be enabled at the same time");
 
 enum CPUMode {
     SingleStep,
@@ -66,6 +70,15 @@ fn flush_cpu(cpu: Rc<RefCell<NESCpu>>, ppu: Rc<RefCell<NESPPU>>) {
     }
 }
 
+fn get_screen_size(show_debugger: bool, show_ppu_info: bool) -> (u32, u32) {
+    let width = NES_SCREEN_WIDTH + if show_debugger { NES_DEBUGGER_WIDTH } else { 0 }
+                                      + if show_ppu_info { NES_PPU_INFO_WIDTH } else { 0 }; 
+
+    let height = NES_SCREEN_HEIGHT + if show_ppu_info { NES_PPU_INFO_HEIGHT } else { 0 };
+
+    (width, height)
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -105,7 +118,35 @@ fn main() {
     ppu.borrow_mut().mapper.load_rom(&chr_rom_data);
 
     let palette = load_palette(args.palette);
+    let mut trace_unit: Option<TraceUnit> = None;
+
     cpu_cell.borrow_mut().reset();
+    #[cfg(all(debug_assertions, feature = "nestest-log"))] 
+    {
+        let mut cpu = cpu_cell.borrow_mut();
+
+        // In debug mode, we are loading nestest.nes ROM without PPU support.
+        // Also, the trace unit is attached to provide instruction + cycle logs.
+        cpu.PC = 0xC000;
+
+        // Start with some dummy address on the stack (0x0800)
+        cpu.SP = 0xFF;
+        cpu.A = 0x00;
+        cpu.op_stack_push(false);
+        cpu.A = 0x08;
+        cpu.op_stack_push(false);
+        cpu.A = 0x00;
+
+        // nestest.log starts with 7 cycles
+        cpu.cycle = 7;
+
+        trace_unit = Some(TraceUnit::new(Path::new("out.log")));
+    }
+    #[cfg(all(debug_assertions, feature = "fceux-log"))]
+    {
+        // We can just start trace_unit without any hacks
+        trace_unit = Some(TraceUnit::new(Path::new("out.log")));
+    }
 
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
@@ -135,6 +176,10 @@ fn main() {
         .create_texture_streaming(PixelFormatEnum::RGB24, 256, 240)
         .unwrap();
 
+    let mut palette_texture = nes_texture_creator
+        .create_texture_streaming(PixelFormatEnum::RGB24, 128, 128)
+        .unwrap();
+
     let mut event_pump = sdl_context.event_pump().unwrap();
 
     // Connect the PPU's registers to the CPU's address space
@@ -161,6 +206,11 @@ fn main() {
                     // functionality in the debugger view.
 
                     // Perform a single tick anyways
+                    if let Some(ref mut tu) = trace_unit {
+                        if cpu_cell.borrow().wait_cycles == 0 {
+                            tu.dump(&cpu_cell.borrow());
+                        }
+                    }
                     if let Err(e) = cpu_cell.borrow_mut().tick() {
                         panic!("{}\nError: {}", cpu_dump(cpu_cell.borrow()), e);
                     }
@@ -173,6 +223,11 @@ fn main() {
             }
             CPUMode::Continuous => { 
                 {
+                    if let Some(ref mut tu) = trace_unit {
+                        if cpu_cell.borrow().wait_cycles == 0 {
+                            tu.dump(&cpu_cell.borrow());
+                        }
+                    }
                     let mut cpu = cpu_cell.borrow_mut();
                     if let Err(e) = cpu.tick() {
                         panic!("{}\nError: {}", cpu_dump(cpu), e);
@@ -182,7 +237,7 @@ fn main() {
                 ppu.borrow_mut().ppu_tick(3); 
 
                 // Simple breakpoint mechanism (make this programmable)
-                if cpu_cell.borrow().PC & 0xFFFF == 32898 {
+                if cpu_cell.borrow().PC & 0xFFFF == 0xC293 {
                     // Finish processing this instruction
                     flush_cpu(Rc::clone(&cpu_cell), Rc::clone(&ppu));
 
@@ -190,10 +245,8 @@ fn main() {
                     should_step = false;
 
                     show_debugger = true;
-                    canvas_cell.borrow_mut().window_mut().set_size(NES_SCREEN_WIDTH
-                        + if show_debugger { NES_DEBUGGER_WIDTH } else { 0 }, 
-                        NES_SCREEN_HEIGHT
-                        + if show_ppu_info { NES_PPU_INFO_HEIGHT } else { 0 }).unwrap();
+                    let size = get_screen_size(show_debugger, show_ppu_info);
+                    canvas_cell.borrow_mut().window_mut().set_size(size.0, size.1).unwrap();
                 }
             }
         }
@@ -216,18 +269,14 @@ fn main() {
                     Event::KeyDown { keycode: Some(Keycode::Hash), ..} => {
                         show_ppu_info = !show_ppu_info;
 
-                        canvas_cell.borrow_mut().window_mut().set_size(NES_SCREEN_WIDTH
-                            + if show_debugger { NES_DEBUGGER_WIDTH } else { 0 }, 
-                            NES_SCREEN_HEIGHT
-                            + if show_ppu_info { NES_PPU_INFO_HEIGHT } else { 0 }).unwrap();
+                        let size = get_screen_size(show_debugger, show_ppu_info);
+                        canvas_cell.borrow_mut().window_mut().set_size(size.0, size.1).unwrap();
                     }
                     Event::KeyDown { keycode: Some(Keycode::Quote), keymod: sdl2::keyboard::Mod::NOMOD, ..} => {
                         show_debugger = !show_debugger;
 
-                        canvas_cell.borrow_mut().window_mut().set_size(NES_SCREEN_WIDTH
-                            + if show_debugger { NES_DEBUGGER_WIDTH } else { 0 }, 
-                            NES_SCREEN_HEIGHT
-                            + if show_ppu_info { NES_PPU_INFO_HEIGHT } else { 0 }).unwrap();
+                        let size = get_screen_size(show_debugger, show_ppu_info);
+                        canvas_cell.borrow_mut().window_mut().set_size(size.0, size.1).unwrap();
                     }
                     Event::KeyDown { keycode: Some(Keycode::Quote), keymod: sdl2::keyboard::Mod::LALTMOD, ..} => {
                         cpu_mode = match cpu_mode {
@@ -380,12 +429,14 @@ fn main() {
                     // Draw the two pattern tables
                     canvas.set_draw_color(Color::RGBA(255, 255, 255, 255));
                     canvas.draw_rects(&(0..2).into_iter().map(|v| {
-                        Rect::new(palette_view_margin.left as i32 + 128 * v + palette_margin.left as i32 * v,
-                            (NES_SCREEN_HEIGHT + palette_view_margin.top * 2 + 14) as i32, 130, 130)
+                        Rect::new(palette_view_margin.left as i32 + 256 * v + palette_margin.left as i32 * v,
+                            (NES_SCREEN_HEIGHT + palette_view_margin.top * 2 + 14) as i32, 258, 258)
                     }).collect::<Vec<Rect>>()).unwrap();
 
                     {
                         let p_ppu = ppu.borrow();
+
+                        let mut palette_raw = [0 as u8; 3*128*128];
 
                         for table in 0..2 {
                             for tile_row in 0..16 {
@@ -399,17 +450,32 @@ fn main() {
                                         for pxidx in 0..8 {
                                             let px_color = (((px_color_msb & (0x80 >> pxidx) > 1) as u8) << 1) | ((px_color_lsb & (0x80 >> pxidx) > 1) as u8);
                                             let px_color_pal = p_ppu.read(0x3F00 + px_color as u16);
+                                            let px_color_rgb = palette[px_color_pal as usize];
 
-                                            println!("{}", px_color_pal);
-                                            canvas.set_draw_color(palette[px_color_pal as usize]);
-                                            canvas.draw_point(Point::new(
-                                                (palette_view_margin.left as i32) + 128i32 * (table as i32) + palette_margin.left as i32 * table as i32 + (pxidx * tile_col) as i32 + 1,
-                                                (NES_SCREEN_HEIGHT + palette_view_margin.top) as i32 * 2 + 15 + (fine_y * tile_row) as i32
-                                            )).unwrap();
+                                            let draw_x = pxidx as i32 + 8 * tile_col as i32;
+                                            let draw_y = fine_y as i32 + 8 * tile_row as i32;
+
+                                            palette_raw[(draw_x * 3 + draw_y * 3 * 128 + 0) as usize] = px_color_rgb.r;
+                                            palette_raw[(draw_x * 3 + draw_y * 3 * 128 + 1) as usize] = px_color_rgb.g;
+                                            palette_raw[(draw_x * 3 + draw_y * 3 * 128 + 2) as usize] = px_color_rgb.b;
                                         }
                                     }
                                 }
                             }
+                            palette_texture.with_lock(None, |buffer: &mut [u8], pitch: usize| {
+                                for y in 0..128 {
+                                    for x in 0..128 {
+                                        let offset = y * pitch + x * 3;
+                                        buffer[offset] = palette_raw[x * 3 + y * 3 * 128 + 0];
+                                        buffer[offset + 1] = palette_raw[x * 3 + y * 3 * 128 + 1];
+                                        buffer[offset + 2] = palette_raw[x * 3 + y * 3 * 128 + 2];
+                                    }
+                                }
+                            }).unwrap();
+                            canvas.copy(&palette_texture, None, Some(Rect::new(
+                                palette_view_margin.left as i32 + 256i32 * (table as i32) + palette_margin.left as i32 * (table as i32) + 1,
+                                (NES_SCREEN_HEIGHT + palette_view_margin.top) as i32 + palette_margin.top as i32 + 18i32,
+                                256, 256))).unwrap();
                         }   
                     }
                 }
@@ -419,6 +485,14 @@ fn main() {
 
             canvas_cell.borrow_mut().copy(&nes_texture, None, Some(Rect::new(0, 0, NES_SCREEN_WIDTH, NES_SCREEN_HEIGHT))).unwrap();
             canvas_cell.borrow_mut().present();
+
+            // Abort if > 1 million cycles have been traced.
+            #[cfg(all(debug_assertions, feature = "fceux-log"))]
+            {
+                if cpu_cell.borrow().cycle > 1_000_000 {
+                    break 'running;
+                }
+            }
         }
     }
 }

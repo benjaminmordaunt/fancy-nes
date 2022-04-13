@@ -11,3 +11,7 @@ features = ["ttf"]
 [dependencies]
 nes = { path = "../nes" }
 clap = { version = "3.1.6", features = ["derive"] }
+
+[features]
+fceux-log = []  # Enables tracing for FCEUX-style logs
+nestest-log = []  # Enables tracing for PPU-less nestest test ROM
