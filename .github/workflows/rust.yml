@@ -21,7 +21,7 @@ jobs:
     - name: Install vcpkg
       run: |
         cargo install cargo-vcpkg
-        cargo vcpkg build
+        cargo vcpkg build -p nes-platform
     - name: Build
       run: cargo build --release --verbose
     - name: Run tests
@@ -46,7 +46,7 @@ jobs:
     - name: Install vcpkg
       run: |
         cargo install cargo-vcpkg
-        cargo vcpkg build
+        cargo vcpkg build -p nes-platform
     - name: Build
       run: cargo build --release --verbose
     - name: Run tests
