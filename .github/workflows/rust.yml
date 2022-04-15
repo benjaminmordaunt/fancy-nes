@@ -26,5 +26,5 @@ jobs:
     - uses: actions/upload-artifact@v3
       with:
         name: fancy-nes
-        path: target/release/nes-platform
+        path: target/debug/nes-platform
         if-no-files-found: error
