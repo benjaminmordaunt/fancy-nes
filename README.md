@@ -1,5 +1,11 @@
 # fancy-nes
 
+## CI & Artifacts
+
+[![Rust](https://github.com/benjaminmordaunt/fancy-nes/actions/workflows/rust.yml/badge.svg)](https://github.com/benjaminmordaunt/fancy-nes/actions/workflows/rust.yml)
+
+Click on the above badge to find recent builds for your platform.
+
 ## License
 Copyright 2022 Benjamin Mordaunt <benmordaunt@protonmail.com>
 
