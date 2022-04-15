@@ -25,7 +25,7 @@ jobs:
       
     - uses: actions/upload-artifact@v3
       with:
-        name: fancy-nes
+        name: "fancy-nes-$GITHUB_JOB"
         path: target/release/nes-platform
         if-no-files-found: error
   macos:
@@ -46,7 +46,7 @@ jobs:
       
     - uses: actions/upload-artifact@v3
       with:
-        name: fancy-nes
+        name: "fancy-nes-$GITHUB_JOB"
         path: target/release/nes-platform
         if-no-files-found: error
     
