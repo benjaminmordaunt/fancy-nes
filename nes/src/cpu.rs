@@ -14,6 +14,7 @@ use self::mem::*;
 pub mod decode;
 pub mod debug;
 pub mod mem;
+pub mod trace;
 
 // Mappers
 pub mod mapper;
@@ -63,7 +64,7 @@ pub enum AddressingMode {
     IndirectIndexed,
 }
 
-pub struct NESCpu {
+pub struct NESCpu<'a> {
     pub status: StatusRegister,
     pub PC: u16,    /* program counter */
     pub SP: u8,     /* stack pointer */
@@ -76,14 +77,16 @@ pub struct NESCpu {
     pub wait_cycles: u8,      /* pending wait cycles */
     pc_skip: u16,     /* how many bytes to advance the PC by for a given instr. */
 
-    pub memory: CPUMemory,
+    pub memory: CPUMemory<'a>,
 
     pub last_legal_instruction: Option<u16>,
     pub do_nmi: bool,
+
+    pub cycle: u32,
 }
 
-impl NESCpu {
-    pub fn new(mapper_id: usize) -> Self {
+impl<'a> NESCpu<'a> {
+    pub fn new(mapper_id: usize, joy1_in: &'a RefCell<u8>) -> Self {
         Self {
             status: StatusRegister::empty(),
             PC: 0, /* given a correct value from the reset method  */
@@ -103,16 +106,24 @@ impl NESCpu {
                         0 => {
                             CPUMapper000::new()
                         }
-                        _ => unimplemented!()
+                        _ => panic!("Unimplemented mapper: {}", mapper_id)
                     }
-                )
+                ),
+                joy1_in,
+                joy_freeze: false,
             },
             last_legal_instruction: None,
             do_nmi: false,
+            cycle: 0,
         }
     }
 
     pub fn tick(&mut self) -> Result<(), String> {
+        #[cfg(debug_assertions)]
+        {
+            self.cycle += 1;
+        }
+
         /* NMI takes priority */
         if self.do_nmi {
             self.nmi();
@@ -139,7 +150,7 @@ impl NESCpu {
 
         /* Execute stage */
         match instr.mnemonic {
-            "ADC" => self.A = self.op_arithmetic(&instr.mode, true),
+            "ADC" => self.A = self.op_arithmetic::<true>(&instr.mode),
             "AND" => self.A = self.op_bitwise(&instr.mode, |x, y| { x & y }),
             "ASL" => self.op_rotate(&instr.mode, true, true),
             "BCC" => self.op_branch(StatusRegister::CARRY, false, &instr.mode),
@@ -172,7 +183,7 @@ impl NESCpu {
             "LDX" => self.X = self.op_load(&instr.mode),
             "LDY" => self.Y = self.op_load(&instr.mode),
             "LSR" => self.op_rotate(&instr.mode, false, true),
-            "NOP" => {},
+            "NOP" => { self.pc_skip = 1; },
             "ORA" => self.A = self.op_bitwise(&instr.mode, |x, y| { x | y }),
             "PHA" => self.op_stack_push(false),
             "PHP" => self.op_stack_push(true),
@@ -182,7 +193,7 @@ impl NESCpu {
             "ROR" => self.op_rotate(&instr.mode, false, false),
             "RTI" => self.leave_subroutine(&InterruptType::IRQ),
             "RTS" => self.leave_subroutine(&InterruptType::SUBROUTINE),
-            "SBC" => self.A = self.op_arithmetic(&instr.mode, false),
+            "SBC" => self.A = self.op_arithmetic::<false>(&instr.mode),
             "SEC" => { self.status.set(StatusRegister::CARRY, true); self.pc_skip = 1; },
             "SED" => { self.status.set(StatusRegister::DECIMAL_MODE, true); self.pc_skip = 1; },
             "SEI" => { self.status.set(StatusRegister::INTERRUPT_DISABLE, true); self.pc_skip = 1; },
@@ -200,7 +211,8 @@ impl NESCpu {
 
         /* Set base number of idle cycles for this instruction.
            Some instructions will have this increased by 1 for a page cross. */
-        self.wait_cycles = instr.cycles;
+        // One less because _this_ tick is a cycle too.
+           self.wait_cycles = instr.cycles - 1;
 
         self.PC += self.pc_skip;
         Ok(())
@@ -257,11 +269,13 @@ impl NESCpu {
                 return (self.target_address + self.X as u16, false);
             }
             AddressingMode::AbsoluteY => {
-                return (self.target_address + self.Y as u16, false);
+                return (self.target_address.wrapping_add(self.Y as u16), false);
             }
             AddressingMode::Indirect => {
                 let addr_lsb: u8 = self.memory.read(self.target_address);
-                let addr_msb: u8 = self.memory.read(self.target_address + 1);
+                let addr_msb: u8 = self.memory.read(
+                    self.target_address & 0xFF00 | 
+                    (self.target_address + 1) & 0x00FF); // See notes below
 
                  /* An original 6502 has does not correctly fetch 
                     the target address if the indirect vector falls on a page boundary (e.g. $xxFF where 
@@ -270,30 +284,37 @@ impl NESCpu {
                     for compatibility always ensure the indirect vector is not at the end of the page.
                  */
                 #[cfg(debug_assertions)]
-                if addr_lsb == 0xFF {
+                if (self.target_address + 1) & 0x00FF == 0x0000 {
                     println!("Indirect JMP at ${:X} falls at end of page. Using \"broken\" behaviour.", &self.PC);
                 }
                 return (addr_lsb as u16 | ((addr_msb as u16) << 8), false);
             }
             AddressingMode::IndexedIndirect => {
-                let zp_addr: u16 = self.target_address + self.X as u16;
-                return (self.memory.read_16(zp_addr), false);
+                let zp_addr_lsb: u8 = self.memory.read((self.target_address + self.X as u16) & 0xFF);
+                let zp_addr_msb: u8 = self.memory.read((self.target_address + self.X as u16 + 1) & 0xFF);
+
+                return ((zp_addr_lsb as u16) | ((zp_addr_msb as u16) << 8), false);
             }
             AddressingMode::IndirectIndexed => {
-                return (self.memory.read_16(self.target_address) + self.Y as u16, false);
+                let mut zp_addr_lsb: u16 = self.memory.read(self.target_address) as u16 + (self.Y as u16);
+                let carry: u16 = (zp_addr_lsb > 0xFF) as u16;
+                zp_addr_lsb &= 0xFF;
+                let zp_addr_msb: u16 = (self.memory.read((self.target_address + 1) & 0xFF) as u16 + carry) & 0xFF;
+
+                return ((zp_addr_lsb) | ((zp_addr_msb) << 8), false);
             }
             _ => unimplemented!()
         }
     }
 
     /* arithmetic operations - ADC, SBC */
-    fn op_arithmetic(&mut self, mode: &AddressingMode, add: bool) -> u8 {
+    fn op_arithmetic<const ADD: bool>(&mut self, mode: &AddressingMode) -> u8 {
         let (addr, page_cross) = self.resolve_address(mode);
         let mut data = self.memory.read(addr);
 
         /* Interestingly, a simple one's complement works here, including all flags
            (exercise for the reader :-) ) */
-        if !add {
+        if !ADD {
             data = !data;
         }
 
@@ -351,6 +372,8 @@ impl NESCpu {
     fn op_branch(&mut self, reg: StatusRegister, set: bool, mode: &AddressingMode) {
         let (addr, page_cross) = self.resolve_address(mode);
         if self.status.contains(reg) == set {
+            // Branch taken - 1 more cycle
+            self.wait_cycles += 1;
             if page_cross {
                 self.wait_cycles += 1;
             }
@@ -412,6 +435,8 @@ impl NESCpu {
             self.status.set(StatusRegister::NEGATIVE, data & 0x80 > 0);
         }
 
+        self.status.set(StatusRegister::ZERO, data == 0);
+
         if matches!(mode, AddressingMode::Accumulator) {
             self.A = data;
             self.pc_skip = 1;
@@ -423,8 +448,8 @@ impl NESCpu {
     /* Register transfers - TAX, TXA, TAY, TYA, TSX, TXS */
     fn op_transfer_a(&mut self, from: u8, txs: bool) -> u8 {
         if !txs {
-            self.status.set(StatusRegister::ZERO, self.A == 0);
-            self.status.set(StatusRegister::NEGATIVE, self.A & 0b10000000 > 0);
+            self.status.set(StatusRegister::ZERO, from == 0);
+            self.status.set(StatusRegister::NEGATIVE, from & 0b10000000 > 0);
         }
 
         self.pc_skip = 1;
@@ -445,9 +470,10 @@ impl NESCpu {
     }
 
     /* Stack operations - PHA, PHP, PLA, PLP */
-    fn op_stack_push(&mut self, status: bool) {
+    pub fn op_stack_push(&mut self, status: bool) {
         if status {
-            self.memory.write(self.SP as u16 + 0x0100, self.status.bits());
+            self.memory.write(self.SP as u16 + 0x0100, (self.status |
+                StatusRegister::BREAK_LOW | StatusRegister::BREAK_HIGH).bits());
         } else {
             self.memory.write(self.SP as u16 + 0x0100, self.A);
         }
@@ -548,7 +574,7 @@ impl NESCpu {
             | InterruptType::NMI => {
                 self.SP += 1;
                 self.status = StatusRegister::from_bits_truncate(self.memory.read(self.SP as u16 + 0x0100));
-                self.status.remove(StatusRegister::INTERRUPT_DISABLE);
+                // self.status.remove(StatusRegister::INTERRUPT_DISABLE);
             }
             _ => {}
         }

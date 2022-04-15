@@ -59,7 +59,7 @@ bitflags! {
     }
 }
 
-pub struct NESPPU {
+pub struct NESPPU<'a> {
     /* Palette memory map:
         0      - universal background colour     \
         1..3   - background palette 0            /`--- (bg 0 selected)
@@ -68,7 +68,7 @@ pub struct NESPPU {
         8      - (aliases to 0*+)                \
         9..B   - background palette 2            /`--- (bg 2 selected)
         C      - (aliases to 0*+)                \
-        D..F   - bacckground palette 3            /`--- (bg 3 selected)
+        D..F   - bacckground palette 3           /`--- (bg 3 selected)
         10     - (aliases to 0*)                 \
         11..13 - sprite palette 0                /`--- (sp 0 selected)
         14     - (aliases to 0*)                 \
@@ -117,8 +117,8 @@ pub struct NESPPU {
     bg_pattern_next_hi: u8,
     bg_pattern_next_lo: u8,
      
-    bg_attribute_shift_reg_hi: u8, /* Background palette attributes shift registers */
-    bg_attribute_shift_reg_lo: u8,
+    bg_attribute_shift_reg_hi: u16, /* Background palette attributes shift registers */
+    bg_attribute_shift_reg_lo: u16,
 
     bg_attribute_next_hi: u8,
     bg_attribute_next_lo: u8,
@@ -130,7 +130,7 @@ pub struct NESPPU {
     // PPUDATA is buffered by one CPU access
     data_bus_next: u8,
 
-    cpu: Rc<RefCell<NESCpu>>,             /* A ref to CPU which lives at least as long as the PPU! (for interrupts) */
+    cpu: Rc<RefCell<NESCpu<'a>>>,             /* A ref to CPU which lives at least as long as the PPU! (for interrupts) */
 
     pub frame: [u8; 61440],  /* A frame, to be rendered when frame_complete is signalled */
     pub frame_ready: bool,
@@ -138,8 +138,8 @@ pub struct NESPPU {
     pub mapper: Box<dyn Mapper<u16, u16>>,
 } 
 
-impl NESPPU {
-    pub fn new(mapper_id: usize, cpu: Rc<RefCell<NESCpu>>, mirroring: Mirroring) -> Self {
+impl<'a> NESPPU<'a> {
+    pub fn new(mapper_id: usize, cpu: Rc<RefCell<NESCpu<'a>>>, mirroring: Mirroring) -> Self {
         Self {
             palette: [0; 32],
             vram: [0; 2048],
@@ -184,7 +184,7 @@ impl NESPPU {
         }
     }
 
-    fn read(&self, mut addr: u16) -> u8 {
+    pub fn read(&self, mut addr: u16) -> u8 {
         match addr {
             // Remappable addresses by the mapper - might come straight back to internal VRAM if mapped that way!
             // If the mapper returns a word starting with 0x1***, treat *** as an index into PPU RAM.
@@ -212,10 +212,20 @@ impl NESPPU {
 
     fn write(&mut self, addr: u16, data: u8) {
         match addr {
+            0x0000..=0x3EFF => {
+                let word: u16;
+                word = self.mapper.write(addr, data).unwrap();
+
+                if word & 0x1000 > 0 {
+                    self.vram[word as usize & 0x0FFF] = data;
+                } else {
+                    // Written by mapper
+                }
+            }
             0x3F00..=0x3FFF => {
                 self.palette[(addr & 0x1F) as usize] = data;
             }
-            _ => { self.mapper.write(addr, data); }
+            _ => { unreachable!() }
         }
     }
 
@@ -287,10 +297,10 @@ impl NESPPU {
             self.write_toggle = false;
         }
         PPUAddress::PPUDATA => {
-            if addr < 0x03F00 {
+            if self.vram_v < 0x03F00 {
                 // Update the internal buffer
                 data = self.data_bus_next;
-                self.data_bus_next = self.read(addr & 0x3FFF);
+                self.data_bus_next = self.read(self.vram_v & 0x3FFF);
             } else {
                 // Otherwise, we get palette data via combinatorial logic
                 data = self.read(addr & 0x3FFF);
@@ -327,21 +337,23 @@ impl NESPPU {
                     }
 
                     if matches!(self.tick, 2..=256 | 321..=336) {
-                        self.bg_attribute_shift_reg_hi >>= 1;
-                        self.bg_attribute_shift_reg_lo >>= 1;
+                        if self.ppu_mask.contains(PPUMASK::BACKGROUND) {
+                            self.bg_attribute_shift_reg_hi <<= 1;
+                            self.bg_attribute_shift_reg_lo <<= 1;
 
-                        self.bg_pattern_shift_reg_hi >>= 1;
-                        self.bg_pattern_shift_reg_lo >>= 1;
+                            self.bg_pattern_shift_reg_hi <<= 1;
+                            self.bg_pattern_shift_reg_lo <<= 1;
+                        }
 
                         match (self.tick - 1) % 8 {
                             0 => {
                                 // Load the background shift registers with pattern table data
-                                self.bg_pattern_shift_reg_hi = (self.bg_pattern_shift_reg_hi & 0x00FF) | (self.bg_pattern_next_hi as u16) << 8;
-                                self.bg_pattern_shift_reg_lo = (self.bg_pattern_shift_reg_lo & 0x00FF) | (self.bg_pattern_next_lo as u16) << 8;
+                                self.bg_pattern_shift_reg_hi = (self.bg_pattern_shift_reg_hi & 0xFF00) | self.bg_pattern_next_hi as u16;
+                                self.bg_pattern_shift_reg_lo = (self.bg_pattern_shift_reg_lo & 0xFF00) | self.bg_pattern_next_lo as u16;
 
                                 // Load the attribute shift registers with an expanded (8x1 slither) attribute value
-                                self.bg_attribute_shift_reg_hi = if self.bg_attribute_next_hi & 1 == 1 { 0xFF } else { 0x00 };
-                                self.bg_attribute_shift_reg_lo = if self.bg_attribute_next_lo & 1 == 1 { 0xFF } else { 0x00 };
+                                self.bg_attribute_shift_reg_hi = (self.bg_attribute_shift_reg_hi & 0xFF00) | if self.bg_attribute_next_hi & 1 == 1 { 0xFF } else { 0x00 };
+                                self.bg_attribute_shift_reg_lo = (self.bg_attribute_shift_reg_lo & 0xFF00) | if self.bg_attribute_next_lo & 1 == 1 { 0xFF } else { 0x00 };
 
                                 self.bg_next_tile = self.read(NESPPU::tile_attr_from_vram_addr(self.vram_v).0);
                             }
@@ -353,14 +365,14 @@ impl NESPPU {
                                 self.bg_pattern_next_lo = self.read(
                                     (self.ppu_ctrl.contains(PPUCTRL::BACKGROUND_TABLE_ADDR) as u16) << 12
                                 |   (self.bg_next_tile as u16) << 4
-                                |   ((self.vram_v & 0x7000) << 12)); 
+                                |   ((self.vram_v & 0x7000) >> 12)); 
                             }
                             6 => {
                                 // Get the msb bit plane from the pattern table for the next tile (+8 offset from LSB)
                                 self.bg_pattern_next_hi = self.read(
                                     (self.ppu_ctrl.contains(PPUCTRL::BACKGROUND_TABLE_ADDR) as u16) << 12
                                 |   (self.bg_next_tile as u16) << 4
-                                |   ((self.vram_v & 0x7000) << 12) + 8);
+                                |   ((self.vram_v & 0x7000) >> 12) + 8);
                             }
                             7 => {
                                 // Scroll horizontally (algorithm taken from NESDEV)
@@ -408,6 +420,11 @@ impl NESPPU {
                             self.vram_v = (self.vram_v & !0x7BE0) | (self.vram_t & 0x7BE0);
                         }
                     }
+
+                    // Superfluous nametable reads at end of scanline
+                    if self.tick == 338 || self.tick == 340 {
+                        self.bg_next_tile = self.read(0x2000 | (self.vram_v & 0x0FFF));
+                    }
                 }
                 241..=260 => {
                     if self.scanline == 241 && self.tick == 1 {
@@ -425,14 +442,14 @@ impl NESPPU {
 
             if self.ppu_mask.contains(PPUMASK::BACKGROUND) {
                 // Retrieve the pattern information, indexing with fine_x
-                let lbp_pattern = ((self.bg_pattern_shift_reg_lo & (1 << self.vram_x)) > 0) as u8;
-                let hbp_pattern = ((self.bg_pattern_shift_reg_hi & (1 << self.vram_x)) > 0) as u8;
+                let lbp_pattern = ((self.bg_pattern_shift_reg_lo & (0x8000 >> self.vram_x)) > 0) as u8;
+                let hbp_pattern = ((self.bg_pattern_shift_reg_hi & (0x8000 >> self.vram_x)) > 0) as u8;
                 
                 bg_pixel = (hbp_pattern << 1) | lbp_pattern;
 
                 // Now let's get the corresponding palette information
-                let lbp_attribute = ((self.bg_attribute_shift_reg_lo & (1 << self.vram_x)) > 0) as u8;
-                let hbp_attribute = ((self.bg_attribute_next_hi & (1 << self.vram_x)) > 0) as u8;
+                let lbp_attribute = ((self.bg_attribute_shift_reg_lo & (0x8000 >> self.vram_x)) > 0) as u8;
+                let hbp_attribute = ((self.bg_attribute_shift_reg_hi & (0x8000 >> self.vram_x)) > 0) as u8;
 
                 bg_palette = (hbp_attribute << 1) | lbp_attribute;
             }

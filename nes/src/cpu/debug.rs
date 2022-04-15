@@ -8,7 +8,7 @@ use crate::cpu::decode::{LUT_6502, Instruction};
 
 use super::{AddressingMode, mem::CPUMemory, NESCpu};
 
-pub fn cpu_dump(cpu: impl Deref<Target = NESCpu>) -> String {
+pub fn cpu_dump<'a>(cpu: impl Deref<Target = NESCpu<'a>>) -> String {
     let mut dump: String = String::new();
     let items_on_stack = 0xFF - cpu.SP;
 

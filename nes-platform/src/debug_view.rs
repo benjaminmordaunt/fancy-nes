@@ -20,9 +20,9 @@ pub struct DebugView<'a> {
     pub addresses: [u16; 21],             /* a list of the 20 addresses disassembled and visible */
 
     disasm: HashMap<u16, (String, u16)>, /* a map of memory addresses to a disasm entry */
-    cpu: Rc<RefCell<NESCpu>>,            /* we need to keep the whole CPU Rc alive, instead of trying to immutably
+    cpu: Rc<RefCell<NESCpu<'a>>>,            /* we need to keep the whole CPU Rc alive, instead of trying to immutably
                                         reference just cpu.memory */
-    ppu: Rc<RefCell<NESPPU>>,
+    ppu: Rc<RefCell<NESPPU<'a>>>,
 
     font: sdl2::ttf::Font<'a, 'static>,
     texture_creator: TextureCreator<WindowContext>,
@@ -32,7 +32,7 @@ pub struct DebugView<'a> {
 impl<'a> DebugView<'a> {
     // Create a DebugView which renders onto the given canvas populates the disasm
     // HashMap with some useful initial entries
-    pub fn new(texture_creator: TextureCreator<WindowContext>, ttf_context: &'a Sdl2TtfContext, cpu: Rc<RefCell<NESCpu>>, ppu: Rc<RefCell<NESPPU>>) -> Self {        
+    pub fn new(texture_creator: TextureCreator<WindowContext>, ttf_context: &'a Sdl2TtfContext, cpu: Rc<RefCell<NESCpu<'a>>>, ppu: Rc<RefCell<NESPPU<'a>>>) -> Self {        
         let mut result = Self {
             addresses: [0; 21],
             disasm: HashMap::new(),
