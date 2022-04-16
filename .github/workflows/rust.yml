@@ -67,6 +67,6 @@ jobs:
     - uses: actions/upload-artifact@v3
       with:
         name: "fancy-nes-${{ env.GITHUB_JOB }}"
-        path: target/release/nes-platform
+        path: target/release/nes-platform.exe
         if-no-files-found: error
     
