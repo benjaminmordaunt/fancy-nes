@@ -26,8 +26,10 @@ jobs:
       
     - uses: actions/upload-artifact@v3
       with:
-        name: "fancy-nes-${{ env.GITHUB_JOB }}"
-        path: target/release/nes-platform
+        name: "fancy-nes-linux-x64"
+        path: |
+          target/release/nes-platform
+          debug.ttf
         if-no-files-found: error
 
   macos-x64:
@@ -46,8 +48,10 @@ jobs:
       
     - uses: actions/upload-artifact@v3
       with:
-        name: "fancy-nes-${{ env.GITHUB_JOB }}"
-        path: target/release/nes-platform
+        name: "fancy-nes-macos-x64"
+        path: |
+          target/release/nes-platform
+          debug.ttf
         if-no-files-found: error
 
   windows-x64:
@@ -66,7 +70,9 @@ jobs:
       
     - uses: actions/upload-artifact@v3
       with:
-        name: "fancy-nes-${{ env.GITHUB_JOB }}"
-        path: target/release/nes-platform.exe
+        name: "fancy-nes-windows-x64"
+        path: |
+          target/release/nes-platform.exe
+          debug.ttf
         if-no-files-found: error
     
