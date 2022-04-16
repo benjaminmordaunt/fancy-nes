@@ -4,12 +4,12 @@ use std::ops::Index;
 use std::path::{PathBuf, Path};
 use std::rc::Rc;
 use clap::{ArgEnum, Parser};
-use nes::cpu::trace::TraceUnit;
-use nes::cpu::{NESCpu, debug};
-use nes::cpu::debug::{disasm_6502, cpu_dump};
-use nes::ppu::NESPPU;
-use nes_platform::debug_view::DebugView;
-use nes_platform::{load_palette, NES_SCREEN_WIDTH, NES_SCREEN_HEIGHT, NES_DEBUGGER_WIDTH, NES_PPU_INFO_HEIGHT, NES_PPU_INFO_WIDTH};
+use fancy_nes_core::cpu::trace::TraceUnit;
+use fancy_nes_core::cpu::NESCpu;
+use fancy_nes_core::ppu::NESPpu;
+use fancy_nes_core::cpu::debug::{disasm_6502, cpu_dump};
+use fancy_nes::debug_view::DebugView;
+use fancy_nes::{load_palette, NES_SCREEN_WIDTH, NES_SCREEN_HEIGHT, NES_DEBUGGER_WIDTH, NES_PPU_INFO_HEIGHT, NES_PPU_INFO_WIDTH};
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::{Color, PixelFormatEnum};
@@ -67,7 +67,7 @@ struct Args {
 }
 
 /* Flush the CPU's wait cycles. Invokes the appropriate number of PPU cycles */
-fn flush_cpu(cpu: Rc<RefCell<NESCpu>>, ppu: Rc<RefCell<NESPPU>>) {
+fn flush_cpu(cpu: Rc<RefCell<NESCpu>>, ppu: Rc<RefCell<NESPpu>>) {
     while cpu.borrow().wait_cycles > 0 {
         if let Err(e) = cpu.borrow_mut().tick() {
             panic!("{}\nError: {}", cpu_dump(cpu.borrow()), e);
@@ -96,14 +96,14 @@ fn main() {
     let mut should_step = false;
 
     let nes_rom = fs::read(args.rom).unwrap();
-    let nes_rom_header = nes::NESHeaderMetadata::parse_header(&nes_rom).unwrap();
+    let nes_rom_header = fancy_nes_core::NESHeaderMetadata::parse_header(&nes_rom).unwrap();
 
     // Controller status
     let mut joy1 = RefCell::new(0 as u8);
     
     // Load the PRG and CHR roms
     let cpu_cell = Rc::new(RefCell::new(NESCpu::new(nes_rom_header.mapper_id as usize, &joy1)));
-    let mut ppu = Rc::new(RefCell::new(NESPPU::new(nes_rom_header.mapper_id as usize, Rc::clone(&cpu_cell), nes_rom_header.hardwired_mirroring)));
+    let mut ppu = Rc::new(RefCell::new(NESPpu::new(nes_rom_header.mapper_id as usize, Rc::clone(&cpu_cell), nes_rom_header.hardwired_mirroring)));
 
     let mut prg_rom_data = vec![0; nes_rom_header.prg_rom_size as usize];
     let chr_rom_data: Vec<u8>;

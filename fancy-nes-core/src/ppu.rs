@@ -59,7 +59,7 @@ bitflags! {
     }
 }
 
-pub struct NESPPU<'a> {
+pub struct NESPpu<'a> {
     /* Palette memory map:
         0      - universal background colour     \
         1..3   - background palette 0            /`--- (bg 0 selected)
@@ -138,7 +138,7 @@ pub struct NESPPU<'a> {
     pub mapper: Box<dyn Mapper<u16, u16>>,
 } 
 
-impl<'a> NESPPU<'a> {
+impl<'a> NESPpu<'a> {
     pub fn new(mapper_id: usize, cpu: Rc<RefCell<NESCpu<'a>>>, mirroring: Mirroring) -> Self {
         Self {
             palette: [0; 32],
@@ -355,10 +355,10 @@ impl<'a> NESPPU<'a> {
                                 self.bg_attribute_shift_reg_hi = (self.bg_attribute_shift_reg_hi & 0xFF00) | if self.bg_attribute_next_hi & 1 == 1 { 0xFF } else { 0x00 };
                                 self.bg_attribute_shift_reg_lo = (self.bg_attribute_shift_reg_lo & 0xFF00) | if self.bg_attribute_next_lo & 1 == 1 { 0xFF } else { 0x00 };
 
-                                self.bg_next_tile = self.read(NESPPU::tile_attr_from_vram_addr(self.vram_v).0);
+                                self.bg_next_tile = self.read(NESPpu::tile_attr_from_vram_addr(self.vram_v).0);
                             }
                             2 => {
-                                self.bg_next_attr = self.read(NESPPU::tile_attr_from_vram_addr(self.vram_v).1);
+                                self.bg_next_attr = self.read(NESPpu::tile_attr_from_vram_addr(self.vram_v).1);
                             }
                             4 => {
                                 // Get the lsb bit plane from the pattern table for the next tile

@@ -1,7 +1,11 @@
+[package]
+name = "fancy-nes"
+version = "0.1.0"
+edition = "2021"
+
 [workspace]
 members = [
-    "nes",
-    "nes-platform"
+    "fancy-nes-core"
 ]
 
 [profile.dev]
@@ -20,3 +24,28 @@ debug = true
 
 [profile.dev-fceux]
 inherits = "dev"
+
+[features]
+fceux-log = ["fancy-nes-core/fceux-log"]
+nestest-log = ["fancy-nes-core/nestest-log"]
+
+[package.metadata.vcpkg]
+dependencies = ["sdl2", "sdl2-ttf"]
+git = "https://github.com/microsoft/vcpkg"
+rev = "aebb363eaa0b658beb19cbefdd5aa2f9cbc14f1e"
+
+[package.metadata.vcpkg.target]
+x86_64-pc-windows-msvc = { triplet = "x64-windows-static-md" }
+x86_64-unknown-linux-gnu = { dependencies = ["sdl2[x11]", "sdl2-ttf"] }
+
+[dependencies]
+clap = { version = "3.1.6", features = ["derive"] }
+
+[dependencies.sdl2]
+version = "0.35.2"
+default-features = false
+features = ["ttf","static-link","use-vcpkg"]
+
+[dependencies.fancy-nes-core]
+path = "fancy-nes-core"
+version = "^0.1.0"

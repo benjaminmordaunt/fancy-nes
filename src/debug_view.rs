@@ -2,9 +2,9 @@ use std::ascii::AsciiExt;
 use std::cell::{RefCell, RefMut};
 use std::collections::HashMap;
 use std::rc::Rc;
-use nes::cpu::{NESCpu, StatusRegister};
-use nes::cpu::debug::disasm_6502;
-use nes::ppu::NESPPU;
+use fancy_nes_core::cpu::{NESCpu, StatusRegister};
+use fancy_nes_core::cpu::debug::disasm_6502;
+use fancy_nes_core::ppu::NESPpu;
 use sdl2::rect::Rect;
 use sdl2::render::{Canvas, TextureCreator, TextureQuery};
 use sdl2::surface;
@@ -22,7 +22,7 @@ pub struct DebugView<'a> {
     disasm: HashMap<u16, (String, u16)>, /* a map of memory addresses to a disasm entry */
     cpu: Rc<RefCell<NESCpu<'a>>>,            /* we need to keep the whole CPU Rc alive, instead of trying to immutably
                                         reference just cpu.memory */
-    ppu: Rc<RefCell<NESPPU<'a>>>,
+    ppu: Rc<RefCell<NESPpu<'a>>>,
 
     font: sdl2::ttf::Font<'a, 'static>,
     texture_creator: TextureCreator<WindowContext>,
@@ -32,7 +32,7 @@ pub struct DebugView<'a> {
 impl<'a> DebugView<'a> {
     // Create a DebugView which renders onto the given canvas populates the disasm
     // HashMap with some useful initial entries
-    pub fn new(texture_creator: TextureCreator<WindowContext>, ttf_context: &'a Sdl2TtfContext, cpu: Rc<RefCell<NESCpu<'a>>>, ppu: Rc<RefCell<NESPPU<'a>>>) -> Self {        
+    pub fn new(texture_creator: TextureCreator<WindowContext>, ttf_context: &'a Sdl2TtfContext, cpu: Rc<RefCell<NESCpu<'a>>>, ppu: Rc<RefCell<NESPpu<'a>>>) -> Self {        
         let mut result = Self {
             addresses: [0; 21],
             disasm: HashMap::new(),

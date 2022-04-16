@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use crate::ppu::NESPPU;
+use crate::ppu::NESPpu;
 
 use super::mapper::Mapper;
 
@@ -34,7 +34,7 @@ pub struct CPUMemory<'a> {
     pub internal_ram: [u8; 0x0800],
     pub io_registers: IORegisters,
     pub mapper: Box<dyn Mapper<u8, ()>>,
-    pub ppu_registers: Option<Rc<RefCell<NESPPU<'a>>>>,
+    pub ppu_registers: Option<Rc<RefCell<NESPpu<'a>>>>,
     pub joy1_in: &'a RefCell<u8>,
     pub joy_freeze: bool,
 }
