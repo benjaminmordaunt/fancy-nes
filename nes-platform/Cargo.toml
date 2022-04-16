@@ -6,7 +6,7 @@ edition = "2021"
 [package.metadata.vcpkg]
 dependencies = ["sdl2", "sdl2-ttf", "zlib"]
 git = "https://github.com/microsoft/vcpkg"
-rev = "261c458af6e3eed5d099144aff95d2b5035f656b"
+rev = "aebb363eaa0b658beb19cbefdd5aa2f9cbc14f1e"
 
 [package.metadata.vcpkg.target]
 x86_64-pc-windows-msvc = { triplet = "x64-windows-static-md" }
