@@ -1,4 +1,4 @@
-name: Rust
+name: fancy-nes
 
 on:
   push:
@@ -10,14 +10,11 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  linux:
-
+  linux-x64:
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v3
-    - name: Install SDL2
-      run: sudo apt-get install -y libsdl2-dev libsdl2-ttf-dev
     - name: Install vcpkg
       run: |
         cargo install cargo-vcpkg
@@ -29,20 +26,15 @@ jobs:
       
     - uses: actions/upload-artifact@v3
       with:
-        name: "fancy-nes-$GITHUB_JOB"
+        name: "fancy-nes-${{ env.GITHUB_JOB }}"
         path: target/release/nes-platform
         if-no-files-found: error
-  macos:
 
+  macos-x64:
     runs-on: macOS-latest
 
     steps:
     - uses: actions/checkout@v3
-    - name: Install SDL2
-      run: |
-        brew update
-        brew install sdl2 sdl2_ttf
-        brew upgrade
     - name: Install vcpkg
       run: |
         cargo install cargo-vcpkg
@@ -54,7 +46,27 @@ jobs:
       
     - uses: actions/upload-artifact@v3
       with:
-        name: "fancy-nes-$GITHUB_JOB"
+        name: "fancy-nes-${{ env.GITHUB_JOB }}"
+        path: target/release/nes-platform
+        if-no-files-found: error
+
+  windows-x64:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Install vcpkg
+      run: |
+        cargo install cargo-vcpkg
+        cargo vcpkg build --manifest-path nes-platform/Cargo.toml
+    - name: Build
+      run: cargo build --release --verbose
+    - name: Run tests
+      run: cargo test --verbose
+      
+    - uses: actions/upload-artifact@v3
+      with:
+        name: "fancy-nes-${{ env.GITHUB_JOB }}"
         path: target/release/nes-platform
         if-no-files-found: error
     
