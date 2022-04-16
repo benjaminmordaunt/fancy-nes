@@ -18,6 +18,11 @@ use sdl2::render::{TextureQuery, Texture};
 use sdl2::render::TextureAccess::*;
 use sdl2::timer;
 
+// Link to "zlib" instead of "z" on Linux. (TOREMOVE)
+#[cfg(target_os = "linux")]
+#[link(name = "zlib", kind = "static")]
+extern { }
+
 // For a reason unknown, the Mac CI build does not link against CoreHaptics for SDL_JOYSTICK
 // support. Create an empty extern block here to force a linkage.
 #[cfg(target_os = "macos")]
