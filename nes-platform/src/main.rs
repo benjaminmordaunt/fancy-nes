@@ -18,6 +18,12 @@ use sdl2::render::{TextureQuery, Texture};
 use sdl2::render::TextureAccess::*;
 use sdl2::timer;
 
+// For a reason unknown, the Mac CI build does not link against CoreHaptics for SDL_JOYSTICK
+// support. Create an empty extern block here to force a linkage.
+#[cfg(target_os = "macos")]
+#[link(name = "CoreHaptics", kind = "framework")]
+extern { } 
+
 // Ensure that we aren't trying to use 2 different trace styles
 #[cfg(all(feature = "fceux-log", feature = "nestest-log"))]
 compile_error!("feature \"fceux-log\" and features \"nestest-log\" cannot be enabled at the same time");
