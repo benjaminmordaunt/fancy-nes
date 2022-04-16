@@ -5,7 +5,7 @@
 ### Platform Support
 
 | Platform       | Notes | Workflow Badge |
-| -------------- | ----: |
+| -------------- | ----: | -------------: |
 | Windows (x64)  | Fully supported - built on Windows Server 2022 | [![fancy-nes-win](https://github.com/benjaminmordaunt/fancy-nes/workflows/fancy-nes-win/badge.svg)](https://github.com/benjaminmordaunt/fancy-nes/actions/workflows/windows.yml) |
 | macOS (x64)    | Fully supported - built on macOS 11.6          | [![fancy-nes-mac](https://github.com/benjaminmordaunt/fancy-nes/workflows/fancy-nes-mac/badge.svg)](https://github.com/benjaminmordaunt/fancy-nes/actions/workflows/mac.yml) | 
 | Linux (x64)    | Not supported in CI - see below                | [![fancy-nes-linux](https://github.com/benjaminmordaunt/fancy-nes/workflows/fancy-nes-linux/badge.svg)](https://github.com/benjaminmordaunt/fancy-nes/actions/workflows/linux.yml) |
