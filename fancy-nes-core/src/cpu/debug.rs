@@ -1,7 +1,9 @@
 use std::cell::Ref;
 use std::ops::Deref;
 
-use crate::cpu::decode::{LUT_6502, Instruction};
+
+use crate::cpu::mem::*;
+use crate::cpu::{decode::{LUT_6502, Instruction}};
 
 /// Provide the facilities necessary for the nes-platform
 /// crate to generate a disasm view of the current NES PRG.
@@ -21,7 +23,7 @@ pub fn cpu_dump<'a>(cpu: impl Deref<Target = NESCpu<'a>>) -> String {
     }
     dump.push_str(format!("Stack (descending - {} items)\n", items_on_stack).as_str());
     for saddr in ((cpu.SP as u16+0x0101)..=0x01FFu16).rev() {
-        dump.push_str(format!("${:X}: {:0>2X}\n", saddr, cpu.memory.observe(saddr)).as_str());
+        dump.push_str(format!("${:X}: {:0>2X}\n", saddr, cpu.memory.read(saddr)).as_str());
     }
 
     dump
@@ -32,7 +34,7 @@ pub fn cpu_dump<'a>(cpu: impl Deref<Target = NESCpu<'a>>) -> String {
 pub fn disasm_6502(instruction_addr: u16, mem: &CPUMemory) -> (String, u16) {
     use AddressingMode::*;
 
-    let opcode = &mem.observe(instruction_addr);
+    let opcode = &mem.read(instruction_addr);
     let instr_opt = LUT_6502.get(opcode);
     let instr: &Instruction;
     let operand: u16;
@@ -51,13 +53,13 @@ pub fn disasm_6502(instruction_addr: u16, mem: &CPUMemory) -> (String, u16) {
         AddressingMode::IndexedIndirect |
         AddressingMode::Immediate |
         AddressingMode::Relative => {
-            operand = mem.observe(instruction_addr + 1) as u16;
+            operand = mem.read(instruction_addr + 1) as u16;
         },
         AddressingMode::Absolute |
         AddressingMode::AbsoluteX |
         AddressingMode::AbsoluteY |
         AddressingMode::Indirect => {
-            operand = mem.observe_16(instruction_addr + 1);
+            operand = mem.read_16(instruction_addr + 1);
         },
         _ => { operand = 0xDEAD; }
     }

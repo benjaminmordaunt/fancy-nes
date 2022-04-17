@@ -1,8 +1,88 @@
 use std::{cell::RefCell, rc::Rc};
+use std::ops::Deref;
 
 use crate::ppu::NESPpu;
 
 use super::mapper::Mapper;
+
+
+pub trait MemoryRead {
+    fn read(&self, addr: u16) -> u8;           /* A side-effect less read */
+    fn read_mut(&mut self, addr: u16) -> u8;   /* A read with side-effects */
+    
+    // Convenience functions to read an address word
+    fn read_16(&self, addr: u16) -> u16;
+    fn read_16_mut(&mut self, addr: u16) -> u16;
+}
+
+// Intrusive read
+impl MemoryRead for CPUMemory<'_> {
+    fn read(&self, addr: u16) -> u8 {
+        match addr {
+            0x0000..=0x1FFF => {
+                /* Internal RAM */
+                self.internal_ram[(addr & 0x07FF) as usize]
+            }
+            0x2000..=0x3FFF => {
+                panic!("Attempted read of address with side-affect from observer.")
+            }
+            0x4000..=0x4017 => {
+                /* I/O registers - defer to MemoryRead */
+                self.io_registers[(addr - 0x4000) as usize]
+            }
+            0x4018..=0x401F => {
+                /* CPU test mode registers */
+                0
+            }
+            0x4020..=0xFFFF => {
+                /* Mapped - may have side-effects for mapper */
+                self.mapper.read(addr)
+            }
+        }
+    }
+
+    fn read_mut(&mut self, addr: u16) -> u8 {
+        match addr {
+            0x0000..=0x1FFF => {
+                /* Internal RAM */
+                self.internal_ram[(addr & 0x07FF) as usize]
+            }
+            0x2000..=0x3FFF => {
+                self.ppu_registers.as_mut().unwrap().borrow_mut().ppu_register_read(0x2000 + (addr & 0x7))
+            }
+            0x4000..=0x4017 => {
+                /* I/O registers - defer to MemoryRead */
+                let data: u8;
+
+                if addr == 0x4016 { /* JOY1 */
+                    // Return and shift the controller shift register
+                    data = self.io_registers[(addr - 0x4000) as usize] & 0x1;
+                    if !self.joy_freeze {
+                        self.io_registers[(addr - 0x4000) as usize] >>= 1;
+                    }
+                } else { data = 0; }
+                data
+            }
+            0x4018..=0x401F => {
+                /* CPU test mode registers */
+                0
+            }
+            0x4020..=0xFFFF => {
+                /* Mapped - may have side-effects for mapper */
+                self.mapper.read(addr) //  TODO: Make this a read_mut
+            }
+        }
+        
+    }
+
+    fn read_16(&self, addr: u16) -> u16 {
+        ((self.read(addr)) as u16) | (((self.read(addr + 1)) as u16) << 8)
+    }
+
+    fn read_16_mut(&mut self, addr: u16) -> u16 {
+        ((self.read_mut(addr)) as u16) | (((self.read_mut(addr + 1)) as u16) << 8)
+    }
+}
 
 type IORegisters = [u8; 0x0018];
     /* SQ1_VOL */
@@ -40,86 +120,6 @@ pub struct CPUMemory<'a> {
 }
 
 impl<'a> CPUMemory<'a> {
-    pub fn read(&mut self, addr: u16) -> u8 {
-        /* Internal RAM */
-        if (addr & 0xF000) < 0x2000 {
-            return self.internal_ram[(addr & 0x07FF) as usize];
-        }
-
-        /* PPU control registers */
-        if (addr & 0xF000) == 0x2000 || (addr & 0xF000) == 0x3000 {
-            return self.ppu_registers.as_mut().unwrap().borrow_mut().ppu_register_read(0x2000 + (addr & 0x7));
-        }
-
-        /* APU and I/O */
-        if (addr >= 0x4000) && (addr <= 0x4017) {
-            let data: u8;
-
-            if addr == 0x4016 { /* JOY1 */
-                // Return and shift the controller shift register
-                data = self.io_registers[(addr - 0x4000) as usize] & 0x1;
-                if !self.joy_freeze {
-                    self.io_registers[(addr - 0x4000) as usize] >>= 1;
-                }
-            } else { data = 0; }
-            return data;
-        }
-
-        /* CPU test mode registers */
-        if (addr >= 0x4018) && (addr <= 0x401F) {
-            return 0;
-        }
-
-        /* Any address 0x4020 - 0xFFFF is handled by a mapper */
-        if (addr >= 0x4020) && (addr <= 0xFFFF) {
-            return self.mapper.read(addr);
-        }
-
-        unimplemented!();
-    }
-
-    // Provide no side-effect read functions used by the debug string
-    // generator module. i.e. accesses to memory-mapped registers are disallowed
-    // (this will likely need to be constrained further once complex mappers are introduced)
-    pub fn observe(&self, addr: u16) -> u8 {
-        /* Internal RAM */
-        if (addr & 0xF000) < 0x2000 {
-            return self.internal_ram[(addr & 0x07FF) as usize];
-        }
-
-        /* PPU control registers */
-        if (addr & 0xF000) == 0x2000 || (addr & 0xF000) == 0x3000 {
-            panic!("Attempted read of address with side-affect from observer.")
-        }
-
-        /* APU and I/O */
-        if (addr >= 0x4000) && (addr <= 0x4017) {
-            return self.io_registers[(addr - 0x4000) as usize];
-        }
-
-        /* CPU test mode registers */
-        if (addr >= 0x4018) && (addr <= 0x401F) {
-            return 0;
-        }
-
-        /* Any address 0x4020 - 0xFFFF is handled by a mapper */
-        if (addr >= 0x4020) && (addr <= 0xFFFF) {
-            return self.mapper.read(addr);
-        }
-
-        unimplemented!();
-    }
-
-    pub fn observe_16(&self, addr: u16) -> u16 {
-        self.observe(addr) as u16
-        | (self.observe(addr + 1) as u16) << 8
-    }
-
-    pub fn read_16(&mut self, addr: u16) -> u16 {
-        self.read(addr) as u16
-        | (self.read(addr + 1) as u16) << 8
-    }
-
     pub fn write(&mut self, addr: u16, data: u8) -> Result<(), String> {
         /* Internal RAM */
         if (addr & 0xF000) < 0x2000 {

@@ -47,7 +47,7 @@ enum InterruptType {
     NMI,        /* non-maskable interrupt (from PPU) */
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum AddressingMode {
     Implied,
     Accumulator,
@@ -73,7 +73,6 @@ pub struct NESCpu<'a> {
     pub Y: u8,      /* index register Y */
 
     /* instructions */
-    target_address: u16,  /* "address" dumped straight from operand */
     pub wait_cycles: u8,      /* pending wait cycles */
     pc_skip: u16,     /* how many bytes to advance the PC by for a given instr. */
 
@@ -94,7 +93,6 @@ impl<'a> NESCpu<'a> {
             A: 0,
             X: 0,
             Y: 0,
-            target_address: 0,
             wait_cycles: 0,
             pc_skip: 0,
             memory: CPUMemory {
@@ -137,7 +135,7 @@ impl<'a> NESCpu<'a> {
         }
 
         /* Fetch stage */
-        let op = self.memory.read(self.PC);
+        let op = self.memory.read_mut(self.PC);
         let instr_opt = LUT_6502.get(&op);
         let instr: &Instruction;
 
@@ -212,7 +210,7 @@ impl<'a> NESCpu<'a> {
         /* Set base number of idle cycles for this instruction.
            Some instructions will have this increased by 1 for a page cross. */
         // One less because _this_ tick is a cycle too.
-           self.wait_cycles = instr.cycles - 1;
+        self.wait_cycles += instr.cycles - 1;
 
         self.PC += self.pc_skip;
         Ok(())
@@ -220,7 +218,10 @@ impl<'a> NESCpu<'a> {
 
     /* resolve the address presented in the operand in
        accorance with addressing mode rules */
-    fn resolve_address(&mut self, mode: &AddressingMode) -> (u16, bool) {
+    /* Returns (resolved_address, page_cross, pc_skip) */
+    fn resolve_address(&self, mode: &AddressingMode) -> (u16, bool, u16) {
+        let target_address: u16;
+        let pc_skip: u16;
 
         /* Set the target_address based on the command length */
         match mode {
@@ -230,52 +231,74 @@ impl<'a> NESCpu<'a> {
             AddressingMode::IndirectIndexed |
             AddressingMode::IndexedIndirect |
             AddressingMode::Relative => {
-                self.target_address = self.memory.read(self.PC + 1) as u16;
-                self.pc_skip = 2;
+                target_address = self.memory.read(self.PC + 1) as u16;
+                pc_skip = 2;
             },
             AddressingMode::Absolute |
             AddressingMode::AbsoluteX |
             AddressingMode::AbsoluteY |
             AddressingMode::Indirect => {
-                self.target_address = self.memory.read_16(self.PC + 1);
-                self.pc_skip = 3;
+                target_address = self.memory.read_16(self.PC + 1);
+                pc_skip = 3;
             },
             AddressingMode::Immediate => {
-                self.pc_skip = 2;
+                target_address = 0; // Unused in immediate addressing
+                pc_skip = 2;
             }
-            _ => { self.pc_skip = 1; }
+            _ => { 
+                target_address = 0;
+                pc_skip = 1; 
+            }
         }
 
         match mode {
+            // For most (all?) page-cross checks, it
+            // depends on whether the NEXT instruction is
+            // on a different page to the target. If so, add
+            // a cycle.
             AddressingMode::Immediate => {
-                return (self.PC + 1, false);
+                return (self.PC + 1, false, pc_skip);
             },
             AddressingMode::ZeroPage => {
-                return (self.target_address & 0xFF, false);
+                // Are we entering the zero-page?
+                let page_cross = (self.PC + pc_skip) & 0xFF00 != 0;
+                return (target_address & 0xFF, page_cross, pc_skip);
             },
             AddressingMode::ZeroPageX => {
-                return (((self.target_address & 0xFF) + self.X as u16) & 0xFF, false); 
+                // Are we entering the zero-page?
+                let page_cross = (self.PC + pc_skip) & 0xFF00 != 0;
+                return (((target_address & 0xFF) + self.X as u16) & 0xFF, page_cross, pc_skip); 
             }
             AddressingMode::ZeroPageY => {
-                return (((self.target_address & 0xFF) + self.Y as u16) & 0xFF, false);
+                // Are we entering the zero-page?
+                let page_cross = (self.PC + pc_skip) & 0xFF00 != 0;
+                return (((target_address & 0xFF) + self.Y as u16) & 0xFF, page_cross, pc_skip);
             }
             AddressingMode::Relative => {
-                return (self.PC.wrapping_add((self.target_address as i8) as u16), false);
+                let target = self.PC.wrapping_add((target_address as i8) as u16);
+                let page_cross = (self.PC + pc_skip) & 0xFF00 != target & 0xFF00;
+                return (target, page_cross, pc_skip);
             }
             AddressingMode::Absolute => {
-                return (self.target_address, false);
+                let target = target_address;
+                let page_cross = (self.PC + pc_skip) & 0xFF00 != target & 0xFF00;
+                return (target, page_cross, pc_skip);
             }
             AddressingMode::AbsoluteX => {
-                return (self.target_address + self.X as u16, false);
+                let target = target_address + self.X as u16;
+                let page_cross = (self.PC + pc_skip) & 0xFF00 != target & 0xFF00;
+                return (target, page_cross, pc_skip);
             }
             AddressingMode::AbsoluteY => {
-                return (self.target_address.wrapping_add(self.Y as u16), false);
+                let target = target_address.wrapping_add(self.Y as u16);
+                let page_cross = (self.PC + pc_skip) & 0xFF00 != target & 0xFF00;
+                return (target, page_cross, pc_skip);
             }
             AddressingMode::Indirect => {
-                let addr_lsb: u8 = self.memory.read(self.target_address);
-                let addr_msb: u8 = self.memory.read(
-                    self.target_address & 0xFF00 | 
-                    (self.target_address + 1) & 0x00FF); // See notes below
+                let addr_lsb: u8 = self.memory.read(target_address);
+                let addr_msb: u8 = self.memory.read( 
+                    target_address & 0xFF00 | 
+                    (target_address + 1) & 0x00FF); // See notes below
 
                  /* An original 6502 has does not correctly fetch 
                     the target address if the indirect vector falls on a page boundary (e.g. $xxFF where 
@@ -284,33 +307,42 @@ impl<'a> NESCpu<'a> {
                     for compatibility always ensure the indirect vector is not at the end of the page.
                  */
                 #[cfg(debug_assertions)]
-                if (self.target_address + 1) & 0x00FF == 0x0000 {
+                if (target_address + 1) & 0x00FF == 0x0000 {
                     println!("Indirect JMP at ${:X} falls at end of page. Using \"broken\" behaviour.", &self.PC);
                 }
-                return (addr_lsb as u16 | ((addr_msb as u16) << 8), false);
+
+                let target = addr_lsb as u16 | ((addr_msb as u16) << 8);
+                let page_cross = (self.PC + pc_skip) & 0xFF00 != target & 0xFF00;
+                return (target, page_cross, pc_skip);
             }
             AddressingMode::IndexedIndirect => {
-                let zp_addr_lsb: u8 = self.memory.read((self.target_address + self.X as u16) & 0xFF);
-                let zp_addr_msb: u8 = self.memory.read((self.target_address + self.X as u16 + 1) & 0xFF);
+                let zp_addr_lsb: u8 = self.memory.read((target_address + self.X as u16) & 0xFF);
+                let zp_addr_msb: u8 = self.memory.read((target_address + self.X as u16 + 1) & 0xFF);
 
-                return ((zp_addr_lsb as u16) | ((zp_addr_msb as u16) << 8), false);
+                let target = (zp_addr_lsb as u16) | ((zp_addr_msb as u16) << 8);
+                let page_cross = (self.PC + pc_skip) & 0xFF00 != target & 0xFF00;
+                return (target, page_cross, pc_skip);
             }
             AddressingMode::IndirectIndexed => {
-                let mut zp_addr_lsb: u16 = self.memory.read(self.target_address) as u16 + (self.Y as u16);
+                let mut zp_addr_lsb: u16 = self.memory.read(target_address) as u16 + (self.Y as u16);
                 let carry: u16 = (zp_addr_lsb > 0xFF) as u16;
                 zp_addr_lsb &= 0xFF;
-                let zp_addr_msb: u16 = (self.memory.read((self.target_address + 1) & 0xFF) as u16 + carry) & 0xFF;
+                let zp_addr_msb: u16 = (self.memory.read((target_address + 1) & 0xFF) as u16 + carry) & 0xFF;
 
-                return ((zp_addr_lsb) | ((zp_addr_msb) << 8), false);
+
+                let target = (zp_addr_lsb) | ((zp_addr_msb) << 8);
+                let page_cross = (self.PC + pc_skip) & 0xFF00 != target & 0xFF00;
+                return (target, page_cross, pc_skip);
             }
-            _ => unimplemented!()
+            _ => panic!("Attempt at address resoluton for non-sensical mode: {:?}", mode)
         }
     }
 
     /* arithmetic operations - ADC, SBC */
     fn op_arithmetic<const ADD: bool>(&mut self, mode: &AddressingMode) -> u8 {
-        let (addr, page_cross) = self.resolve_address(mode);
-        let mut data = self.memory.read(addr);
+        let (addr, page_cross, pc_skip) = self.resolve_address(mode);
+        self.pc_skip = pc_skip;
+        let mut data = self.memory.read_mut(addr);
 
         /* Interestingly, a simple one's complement works here, including all flags
            (exercise for the reader :-) ) */
@@ -327,32 +359,47 @@ impl<'a> NESCpu<'a> {
         self.status.set(StatusRegister::NEGATIVE, result & 0x80 > 0);
 
         if page_cross {
-            self.wait_cycles += 1;
+            self.wait_cycles +=
+                match mode {
+                    AddressingMode::AbsoluteX
+                    | AddressingMode::AbsoluteY
+                    | AddressingMode::IndirectIndexed => { 1 }
+                    _ => { 0 }
+                };
         }
         result
     }
 
     /* load operations - LDA, LDX, LDY */
     fn op_load(&mut self, mode: &AddressingMode) -> u8 {
-        let (addr, page_cross) = self.resolve_address(mode);
-        let data = self.memory.read(addr);
+        let (addr, page_cross, pc_skip) = self.resolve_address(mode);
+        self.pc_skip = pc_skip;
+        let data = self.memory.read_mut(addr);
         self.status.set(StatusRegister::ZERO, data == 0);
         self.status.set(StatusRegister::NEGATIVE, data & 0b10000000 > 0);
         if page_cross {
-            self.wait_cycles += 1;
+            self.wait_cycles +=
+                match mode {
+                    AddressingMode::AbsoluteX
+                    | AddressingMode::AbsoluteY
+                    | AddressingMode::IndirectIndexed => { 1 }
+                    _ => { 0 }
+                };
         }
         data
     }
 
     /* store operations - STA, STX, STY */
     fn op_store(&mut self, data: u8, mode: &AddressingMode) {
-        let (addr, _) = self.resolve_address(mode);
+        let (addr, _, pc_skip) = self.resolve_address(mode);
+        self.pc_skip = pc_skip;
         self.memory.write(addr, data);
     }
 
     /* jump operations - JMP, JSR, RTI, RTS */
     fn op_jump(&mut self, mode: &AddressingMode) {
-        let (addr, _) = self.resolve_address(mode);
+        let (addr, _, pc_skip) = self.resolve_address(mode);
+        self.pc_skip = pc_skip;
 
         self.PC = addr;
         self.pc_skip = 0;
@@ -360,17 +407,21 @@ impl<'a> NESCpu<'a> {
 
     /* bit test */
     fn op_bit(&mut self, mode: &AddressingMode) {
-        let addr = self.resolve_address(mode).0;
-        let data = self.memory.read(addr);
+        let (addr, _, pc_skip) = self.resolve_address(mode);
+        let data = self.memory.read_mut(addr);
 
         self.status.set(StatusRegister::ZERO, self.A & data == 0);
         self.status.set(StatusRegister::OVERFLOW, data & 0x40 > 0);
         self.status.set(StatusRegister::NEGATIVE, data & 0x80 > 0);
+
+        self.pc_skip = pc_skip;
     }
 
     /* conditional branch operations - BMI, BEQ, BNE, BPL, BVC, BVS */
     fn op_branch(&mut self, reg: StatusRegister, set: bool, mode: &AddressingMode) {
-        let (addr, page_cross) = self.resolve_address(mode);
+        let (addr, page_cross, pc_skip) = self.resolve_address(mode);
+        self.pc_skip = pc_skip;
+
         if self.status.contains(reg) == set {
             // Branch taken - 1 more cycle
             self.wait_cycles += 1;
@@ -383,18 +434,30 @@ impl<'a> NESCpu<'a> {
 
     /* Bitwise operators - AND, EOR, ORA */
     fn op_bitwise(&mut self, mode: &AddressingMode, func: impl Fn(u8, u8) -> u8) -> u8 {
-        let (addr, _) = self.resolve_address(mode);
-        let data = self.memory.read(addr);
+        let (addr, page_cross, pc_skip) = self.resolve_address(mode);
+        self.pc_skip = pc_skip;
+        let data = self.memory.read_mut(addr);
 
         let result = func(self.A, data);
         self.status.set(StatusRegister::ZERO, result == 0);
         self.status.set(StatusRegister::NEGATIVE, result & 0x80 > 0);
+
+        if page_cross {
+            self.wait_cycles +=
+                match mode {
+                    AddressingMode::AbsoluteX
+                    | AddressingMode::AbsoluteY
+                    | AddressingMode::IndirectIndexed => { 1 }
+                    _ => { 0 }
+                };
+        }
         result
     }
 
     fn op_incdec_addr(&mut self, inc: bool, mode: &AddressingMode) {
-        let addr = self.resolve_address(mode).0;
-        let data = self.memory.read(addr);
+        let (addr, _, pc_skip) = self.resolve_address(mode);
+        self.pc_skip = pc_skip;
+        let data = self.memory.read_mut(addr);
 
         let result = if inc { data.wrapping_add(1) } else { data.wrapping_sub(1) };
         self.memory.write(addr, result);
@@ -419,7 +482,7 @@ impl<'a> NESCpu<'a> {
             self.A
         } else {
             addr = self.resolve_address(mode).0;
-            self.memory.read(addr)
+            self.memory.read_mut(addr)
         };
 
         let old_carry = self.status.contains(StatusRegister::CARRY) as u8;
@@ -458,14 +521,21 @@ impl<'a> NESCpu<'a> {
 
     /* Comparison instructions - CMP, CPX, CPY */
     fn op_compare(&mut self, lhs: u8, mode: &AddressingMode) {
-        let (addr, page_cross) = self.resolve_address(mode);
-        let rhs = self.memory.read(addr);
+        let (addr, page_cross, pc_skip) = self.resolve_address(mode);
+        self.pc_skip = pc_skip;
+        let rhs = self.memory.read_mut(addr);
 
         self.status.set(StatusRegister::CARRY, lhs >= rhs);
         self.status.set(StatusRegister::ZERO, lhs == rhs);
         self.status.set(StatusRegister::NEGATIVE, lhs.wrapping_sub(rhs) & 0x80 > 0);
         if page_cross {
-            self.wait_cycles += 1;
+            self.wait_cycles +=
+                match mode {
+                    AddressingMode::AbsoluteX
+                    | AddressingMode::AbsoluteY
+                    | AddressingMode::IndirectIndexed => { 1 }
+                    _ => { 0 }
+                };
         }
     }
 
@@ -485,9 +555,9 @@ impl<'a> NESCpu<'a> {
         self.SP += 1;
         self.pc_skip = 1;
         if status {
-            return self.memory.read(self.SP as u16 + 0x0100);
+            return self.memory.read_mut(self.SP as u16 + 0x0100);
         } else {
-            let result = self.memory.read(self.SP as u16 + 0x0100);
+            let result = self.memory.read_mut(self.SP as u16 + 0x0100);
             self.status.set(StatusRegister::ZERO, result == 0);
             self.status.set(StatusRegister::NEGATIVE, result & 0x80 > 0);
             return result;
@@ -534,28 +604,28 @@ impl<'a> NESCpu<'a> {
         
         match inttype {
             InterruptType::SUBROUTINE => {
-                self.PC = self.memory.read_16(self.PC - 1);
+                self.PC = self.memory.read_16_mut(self.PC - 1);
             },
             InterruptType::BRK => {
                 self.status.insert(StatusRegister::BREAK_LOW);
                 self.memory.write(self.SP as u16 + 0x0100, self.status.bits());
                 self.status.insert(StatusRegister::INTERRUPT_DISABLE);
                 self.SP -= 1;
-                self.PC = self.memory.read_16(0xFFFA);
+                self.PC = self.memory.read_16_mut(0xFFFA);
             },
             InterruptType::IRQ => {
                 self.status.remove(StatusRegister::BREAK_LOW);
                 self.memory.write(self.SP as u16 + 0x0100, self.status.bits());
                 self.status.insert(StatusRegister::INTERRUPT_DISABLE);
                 self.SP -= 1;
-                self.PC = self.memory.read_16(0xFFFE);
+                self.PC = self.memory.read_16_mut(0xFFFE);
             },
             InterruptType::NMI => {
                 self.status.remove(StatusRegister::BREAK_LOW);
                 self.memory.write(self.SP as u16 + 0x0100, self.status.bits());
                 self.status.insert(StatusRegister::INTERRUPT_DISABLE);
                 self.SP -= 1;
-                self.PC = self.memory.read_16(0xFFFA);
+                self.PC = self.memory.read_16_mut(0xFFFA);
             }
         }
 
@@ -573,16 +643,16 @@ impl<'a> NESCpu<'a> {
             | InterruptType::BRK
             | InterruptType::NMI => {
                 self.SP += 1;
-                self.status = StatusRegister::from_bits_truncate(self.memory.read(self.SP as u16 + 0x0100));
+                self.status = StatusRegister::from_bits_truncate(self.memory.read_mut(self.SP as u16 + 0x0100));
                 // self.status.remove(StatusRegister::INTERRUPT_DISABLE);
             }
             _ => {}
         }
 
         self.SP += 1;
-        pc |= self.memory.read(self.SP as u16 + 0x0100) as u16;
+        pc |= self.memory.read_mut(self.SP as u16 + 0x0100) as u16;
         self.SP += 1;
-        pc |= (self.memory.read(self.SP as u16 + 0x0100) as u16) << 8;
+        pc |= (self.memory.read_mut(self.SP as u16 + 0x0100) as u16) << 8;
 
         /* Actually start at the next instruction, unless this is an RTI */
         match inttype {
@@ -602,7 +672,7 @@ impl<'a> NESCpu<'a> {
     pub fn reset(&mut self) {
         self.status.insert(StatusRegister::INTERRUPT_DISABLE);
         self.status.insert(StatusRegister::BREAK_HIGH); /* always 1 */
-        self.PC = self.memory.read_16(0xFFFC);
+        self.PC = self.memory.read_16_mut(0xFFFC);
     }
 
     /* Handle the NMI (non-maskable interrupt) - called primarily by the PPU */
