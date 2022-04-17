@@ -18,7 +18,7 @@ jobs:
     - name: Install vcpkg
       run: |
         cargo install cargo-vcpkg
-        cargo vcpkg build --manifest-path nes-platform/Cargo.toml
+        cargo vcpkg build
     - name: Build
       run: cargo build --release --verbose
     - name: Run tests
@@ -28,6 +28,6 @@ jobs:
       with:
         name: "fancy-nes-linux-x64"
         path: |
-          target/release/nes-platform
+          target/release/fancy-nes
           debug.ttf
         if-no-files-found: error
