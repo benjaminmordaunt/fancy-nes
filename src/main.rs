@@ -86,7 +86,19 @@ fn get_screen_size(show_debugger: bool, show_ppu_info: bool) -> (u32, u32) {
 }
 
 fn main() {
-    let args = Args::parse();
+    let args: Args;
+    if cfg!(all(debug_assertions, feature = "nestest-log")) {
+        // Mock program arguments
+        args = Args {
+            region: Some(Region::NTSC),
+            rom: PathBuf::from("tools/roms/nestest.nes"),
+            palette: PathBuf::from("data/palette/default.pal"),
+            halted_debug: false,
+        };
+        
+    } else {
+        args = Args::parse();
+    }
 
     let mut show_ppu_info = false;
     let mut palette_selected = 0;
@@ -96,6 +108,7 @@ fn main() {
     let mut should_step = false;
 
     let nes_rom = fs::read(args.rom).unwrap();
+
     let nes_rom_header = fancy_nes_core::NESHeaderMetadata::parse_header(&nes_rom).unwrap();
 
     // Controller status

@@ -6,7 +6,7 @@
 
 | Platform       | Notes | Workflow Badge |
 | -------------- | ----: | -------------: |
-| Windows (x64)  | Fully supported - built on Windows Server 2022 | [![fancy-nes-win](https://github.com/benjaminmordaunt/fancy-nes/workflows/fancy-nes-win/badge.svg)](https://github.com/benjaminmordaunt/fancy-nes/actions/workflows/windows.yml) |
+| Windows (x64)  | Fully supported - built on Windows Server 2022 | [![fancy-nes-win](https://github.com/benjaminmordaunt/fancy-nes/workflows/fancy-nes-win/badge.svg)](https://github.com/benjaminmordaunt/fancy-nes/actions/workflows/win.yml) |
 | macOS (x64)    | Fully supported - built on macOS 11.6          | [![fancy-nes-mac](https://github.com/benjaminmordaunt/fancy-nes/workflows/fancy-nes-mac/badge.svg)](https://github.com/benjaminmordaunt/fancy-nes/actions/workflows/mac.yml) | 
 | Linux (x64)    | Not supported in CI - see below                | [![fancy-nes-linux](https://github.com/benjaminmordaunt/fancy-nes/workflows/fancy-nes-linux/badge.svg)](https://github.com/benjaminmordaunt/fancy-nes/actions/workflows/linux.yml) |
 
@@ -32,7 +32,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 
-### Disassembly Demo
+## Disassembly Demo
 
 The emulator currently has (mostly working) 6502 emulation and work is
 ongoing to implement the PPU to produce graphics.
@@ -41,3 +41,7 @@ Below is an example of the disassembly of the first 26 instructions run
 in the emulated CPU after the reset vector for Super Mario Bros. (E).
 
 ![Super Mario Bros disasm](media/6502_disasm.gif)
+
+## Debugging
+
+In order to run a comparison between the expected execution of the CPU-only portion of nestest and the actual behaviour of fancy-nes, enable the `nestest-log` feature. Note that this has no effect in release mode.
