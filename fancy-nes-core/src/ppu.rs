@@ -375,12 +375,15 @@ impl<'a> NESPpu<'a> {
                                 |   ((self.vram_v & 0x7000) >> 12) + 8);
                             }
                             7 => {
-                                // Scroll horizontally (algorithm taken from NESDEV)
-                                if self.vram_v & 0x001F == 31 { // Are we at the end of a nametable?
-                                    self.vram_v &= !0x001F;     // Reset course X to 0
-                                    self.vram_v ^= 0x0400;      // Switch the horizontal nametable
-                                } else {
-                                    self.vram_v += 1; // Increment as usual :-)
+                                // This is only done when rendering is enabled
+                                if self.ppu_mask.contains(PPUMASK::RENDERING) {
+                                    // Scroll horizontally (algorithm taken from NESDEV)
+                                    if self.vram_v & 0x001F == 31 { // Are we at the end of a nametable?
+                                        self.vram_v &= !0x001F;     // Reset course X to 0
+                                        self.vram_v ^= 0x0400;      // Switch the horizontal nametable
+                                    } else {
+                                        self.vram_v += 1; // Increment as usual :-)
+                                    }
                                 }
                             }
                             _ => {}
@@ -390,20 +393,23 @@ impl<'a> NESPpu<'a> {
                     if self.tick == 256 {
                         // When we reach the end of a scanline, increment the fine Y-scroll, then course vertical scroll.
                         // Again, this algorithm is lovingly taken from NESDEV.
-                        if self.vram_v & 0x7000 != 0x7000 {
-                            self.vram_v += 0x1000; // Standard fine-Y increment
-                        } else {
-                            self.vram_v &= !0x7000;                       // Reset fine-Y to 0
-                            let mut y = (self.vram_v & 0x03E0) >> 5; // Fine-y = course-y
-                            if y == 29 {
-                                y = 0;
-                                self.vram_v ^= 0x0800;  // Switch the vertical nametable
-                            } else if y == 31 {
-                                y = 0;                  // Reset course Y, but don't switch nametable
+                        // This is only done when rendering is enabled
+                        if self.ppu_mask.contains(PPUMASK::RENDERING) {
+                            if self.vram_v & 0x7000 != 0x7000 {
+                                self.vram_v += 0x1000; // Standard fine-Y increment
                             } else {
-                                y += 1;                 // Increment course-Y
+                                self.vram_v &= !0x7000;                       // Reset fine-Y to 0
+                                let mut y = (self.vram_v & 0x03E0) >> 5; // Fine-y = course-y
+                                if y == 29 {
+                                    y = 0;
+                                    self.vram_v ^= 0x0800;  // Switch the vertical nametable
+                                } else if y == 31 {
+                                    y = 0;                  // Reset course Y, but don't switch nametable
+                                } else {
+                                    y += 1;                 // Increment course-Y
+                                }
+                                self.vram_v = (self.vram_v & !0x03E0) | (y << 5);
                             }
-                            self.vram_v = (self.vram_v & !0x03E0) | (y << 5);
                         }
                     }
 

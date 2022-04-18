@@ -40,7 +40,7 @@ impl TraceUnit {
         }
 
         let line = format!(
-            "{:0>4X}\t{}\t\tA:{:0>2X} X:{:0>2X} Y:{:0>2X} P:{:0>2X} SP:{:0>2X} CYC:{} RADDR:{:0>4X}\n",
+            "{:0>4X}\t{}\t\tA:{:0>2X} X:{:0>2X} Y:{:0>2X} P:{:0>2X} SP:{:0>2X} CYC:{} EA:{:0>4X}\n",
             cpu.PC, disasm_6502(cpu.PC, &cpu.memory).0,
             cpu.A,
             cpu.X,

@@ -478,10 +478,12 @@ impl<'a> NESCpu<'a> {
     /* Rotate operators - ROL, ROR */
     fn op_rotate(&mut self, mode: &AddressingMode, left: bool, arith: bool) {
         let mut addr: u16 = 0;
+        let pc_skip: u16;
         let mut data = if matches!(mode, AddressingMode::Accumulator) {
+            pc_skip = 1;
             self.A
         } else {
-            addr = self.resolve_address(mode).0;
+            (addr, _, pc_skip) = self.resolve_address(mode);
             self.memory.read_mut(addr)
         };
 
@@ -502,9 +504,10 @@ impl<'a> NESCpu<'a> {
 
         if matches!(mode, AddressingMode::Accumulator) {
             self.A = data;
-            self.pc_skip = 1;
+            self.pc_skip = pc_skip;
         } else {
             self.memory.write(addr, data);
+            self.pc_skip = pc_skip;
         }
     }
 

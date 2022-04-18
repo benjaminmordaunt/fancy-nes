@@ -56,9 +56,9 @@ impl MemoryRead for CPUMemory<'_> {
 
                 if addr == 0x4016 { /* JOY1 */
                     // Return and shift the controller shift register
-                    data = self.io_registers[(addr - 0x4000) as usize] & 0x1;
+                    data = *self.joy1_in.borrow() & 0x1;
                     if !self.joy_freeze {
-                        self.io_registers[(addr - 0x4000) as usize] >>= 1;
+                        *self.joy1_in.borrow_mut() >>= 1;
                     }
                 } else { data = 0; }
                 data
