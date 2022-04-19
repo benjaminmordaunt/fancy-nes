@@ -84,7 +84,10 @@ pub struct NESPpu<'a> {
     */
     pub palette: [u8; 32],
     vram: [u8; 2048],   /* 2KB of RAM inside the NES dedicated to the PPU     */
-    oam: [u8; 256],     /* CPU can manipulate via memory-mapped DMA registers */
+    poam: [u8; 64*4],   /* Primary OAM can be DMA'd using OAMDATA */
+    soam: [u8; 8*4],    /* CPU can manipulate via memory-mapped DMA registers */
+                        /* Secondary OAM - stores 8 sprites for current scanline */
+                        
 
     write_toggle: bool, /* The latch shared by $2005, $2006 to distinguish 
                           between first and second writes. */
@@ -130,6 +133,13 @@ pub struct NESPpu<'a> {
     // PPUDATA is buffered by one CPU access
     data_bus_next: u8,
 
+    // PPU sprite evaluation
+    poam_data: u8,
+    poam_sprite_index: usize,
+    poam_sprite_byte_index: usize,
+    soam_next_open_slot: usize,
+    sprite_evaluation_substage: usize,
+
     cpu: Rc<RefCell<NESCpu<'a>>>,             /* A ref to CPU which lives at least as long as the PPU! (for interrupts) */
 
     pub frame: [u8; 61440],  /* A frame, to be rendered when frame_complete is signalled */
@@ -143,7 +153,8 @@ impl<'a> NESPpu<'a> {
         Self {
             palette: [0; 32],
             vram: [0; 2048],
-            oam: [0; 256],
+            poam: [0; 64*4],
+            soam: [0; 8*4],
             write_toggle: false,
             scanline: 261,
             vram_v: 0,
@@ -170,6 +181,13 @@ impl<'a> NESPpu<'a> {
             bg_next_tile: 0,
 
             data_bus_next: 0,
+
+            poam_data: 0xFF,
+            poam_sprite_index: 0,
+            poam_sprite_byte_index: 0,
+            soam_next_open_slot: 0,
+            sprite_evaluation_substage: 1,
+
 
             frame: [0; 61440],
             frame_ready: false,
@@ -441,6 +459,94 @@ impl<'a> NESPpu<'a> {
                     }
                 }
                 _ => {}
+            }
+
+
+            match self.tick {
+                1..=64 => {
+                    // Initialize sOAM with $FF
+                    self.soam[self.tick as usize - 1] = 0xFF;
+                }
+                65..=256 => {
+                    if self.tick % 2 == 1 { // Odd cycles - read
+                        match self.sprite_evaluation_substage {
+                            1 => {
+                                self.poam_data = self.poam[4*self.poam_sprite_index + self.poam_sprite_byte_index];
+                            }
+                            2 => {
+                                // Increment n is not handled on odd cycles
+                            }
+                            // Sprite overflow checks ...
+                            3 => {
+                                self.poam_data = self.poam[4*self.poam_sprite_index + self.poam_sprite_byte_index];
+
+                                if (self.poam_data..(self.poam_data+8)).contains(&(self.scanline as u8)) {
+                                    self.ppu_status.insert(PPUSTATUS::SPRITE_OVERFLOW);
+                                    self.poam_sprite_byte_index += 1;
+
+                                    if self.poam_sprite_byte_index >= 4 {
+                                        self.poam_sprite_index += 1;
+                                        self.poam_sprite_byte_index = 0;
+                                    }
+                                } else {
+                                    self.poam_sprite_byte_index += 1;    // Hardware bug
+                                    // Wrap sprite_byte_index, but don't carry into sprite_index
+                                    if self.poam_sprite_byte_index >= 4 {
+                                        self.poam_sprite_byte_index = 0;
+                                    }
+                                    self.poam_sprite_index += 1;
+                                    if self.poam_sprite_index >= 64 {
+                                        self.sprite_evaluation_substage = 4;
+                                    } else {
+                                        self.poam_sprite_byte_index = 0; // Effectively restart stage 3
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    } else { // Even cycles - write
+                        match self.sprite_evaluation_substage {
+                            1 => {
+                                if self.soam_next_open_slot <= 7 { // We have sOAM slots available
+                                    // Use the same byte index as pOAM to determine where in slot to write.
+                                    self.soam[4*self.soam_next_open_slot + self.poam_sprite_byte_index] = self.poam_data;
+                                }
+                                // Check if that y-coordinate is of interest to us
+                                // In order words, is this scanline in the range [poam_data, poam_data + 8) ?
+                                if (self.poam_data..(self.poam_data+8)).contains(&(self.scanline as u8)) {
+                                    self.poam_sprite_byte_index += 1;
+                                    if self.poam_sprite_byte_index >= 4 {
+                                        // We've finished here
+                                        self.sprite_evaluation_substage = 2;
+                                        self.poam_sprite_byte_index = 0;
+                                    }
+                                } else {
+                                    self.sprite_evaluation_substage = 2;
+                                }
+                            }
+                            2 => {
+                                // Increment poam_sprite_index
+                                self.poam_sprite_index += 1;
+                                if self.poam_sprite_index >= 64 {
+                                    // Overflow
+                                    // This will go back to zero, meaning that sprite evaluation
+                                    // will continue to try to fit sprite 0 (or first matching sprite)
+                                    // into sOAM, but fail each time (because it is full)
+                                    self.poam_sprite_index = 0; // Overflow
+                                    self.sprite_evaluation_substage = 4;
+                                } else if self.soam_next_open_slot <= 7 {
+                                    self.sprite_evaluation_substage = 1;
+                                } else if self.soam_next_open_slot == 8 {
+                                    // You're supposed to disable writes in this case.
+                                    // However, the logic here is such that writes just won't
+                                    // get done anyways.
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => { todo!() }
             }
 
             let mut bg_pixel: u8 = 0;    /* An index into a palette */
