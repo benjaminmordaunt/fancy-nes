@@ -120,6 +120,11 @@ pub struct CPUMemory<'a> {
 }
 
 impl<'a> CPUMemory<'a> {
+    // Do a direct write to the PPU's pOAM (used by CPU OAM DMA)
+    pub fn write_poam(&mut self, addr: usize, data: u8) {
+        self.ppu_registers.as_mut().unwrap().borrow_mut().poam[addr] = data;
+    }
+
     pub fn write(&mut self, addr: u16, data: u8) -> Result<(), String> {
         /* Internal RAM */
         if (addr & 0xF000) < 0x2000 {
@@ -134,6 +139,23 @@ impl<'a> CPUMemory<'a> {
 
         /* APU and I/O */
         if (addr >= 0x4000) && (addr <= 0x4017) {
+            // OAM DMA ($4014)
+            // DMA operations dump a page (256 bytes) of CPU memory into
+            // PPU pOAM
+            if addr == 0x4014 {
+                // FIXME: Wait cycles depend on even/odd cycles
+                // For now, just enforce the slow case, where 514 cycles
+                // after the write tick are spent
+
+                // Write instructions write to the address on their last
+                // tick. So we can just add a delay here.
+                // Delay added in cpu.rs before calls to memory.
+                // FIXME - Optimize this, perhaps?
+                for i in 0..256 {
+                    self.ppu_registers.as_mut().unwrap().borrow_mut().poam[i] = self.read(((data as u16) << 8) + i as u16);
+                }
+            }
+
             if addr == 0x4016 {
                 if data & 0x1 == 0x1 {
                     // Reload the controller(s) shift registers

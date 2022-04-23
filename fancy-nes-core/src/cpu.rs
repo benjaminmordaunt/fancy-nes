@@ -73,8 +73,10 @@ pub struct NESCpu<'a> {
     pub Y: u8,      /* index register Y */
 
     /* instructions */
-    pub wait_cycles: u8,      /* pending wait cycles */
-    pc_skip: u16,     /* how many bytes to advance the PC by for a given instr. */
+    pub wait_cycles: u16,      /* pending wait cycles */
+    pc_skip: u16,              /* how many bytes to advance the PC by for a given instr. */
+    dma_halt: bool,            /* is processing a DMA request to OAMDATA */
+    next_dma_addr: usize,      /* the next CPU address the DMA process should write from */
 
     pub memory: CPUMemory<'a>,
 
@@ -113,6 +115,8 @@ impl<'a> NESCpu<'a> {
             last_legal_instruction: None,
             do_nmi: false,
             cycle: 0,
+            dma_halt: false,
+            next_dma_addr: 0,
         }
     }
 
@@ -120,6 +124,21 @@ impl<'a> NESCpu<'a> {
         #[cfg(debug_assertions)]
         {
             self.cycle += 1;
+        }
+
+        /* If we're doing a DMA, the CPU
+           has relinquished control of the memory */
+        if self.dma_halt {
+            self.memory.write_poam(self.next_dma_addr & 0xFF, self.memory.read(self.next_dma_addr as u16));
+
+            if self.next_dma_addr & 0xFF == 0xFF {
+                self.dma_halt = false;
+            }
+
+            self.next_dma_addr += 1;
+
+            // Don't do anything in this cycle.
+            return Ok(());
         }
 
         /* NMI takes priority */
@@ -392,6 +411,14 @@ impl<'a> NESCpu<'a> {
     /* store operations - STA, STX, STY */
     fn op_store(&mut self, data: u8, mode: &AddressingMode) {
         let (addr, _, pc_skip) = self.resolve_address(mode);
+
+        // If we're doing an op_store to OAMDMA, halt the CPU for 514 cycles
+        // FIXME - make this wait value exact
+        if addr == 0x4014 {
+            self.dma_halt = true;
+            self.next_dma_addr = (data as usize) << 8;
+        }
+
         self.pc_skip = pc_skip;
         self.memory.write(addr, data);
     }

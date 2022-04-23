@@ -8,13 +8,13 @@ use super::AddressingMode;
 pub struct Instruction {
     pub mnemonic: &'static str,
     pub mode: AddressingMode,
-    pub cycles: u8,
+    pub cycles: u16,
 }
 
 lazy_static! {
     pub static ref LUT_6502: HashMap<u8, Instruction> = {
         let mut lut = HashMap::new();
-        let mut add = |ops_str, ops: Vec<(u8, AddressingMode, u8)>| {
+        let mut add = |ops_str, ops: Vec<(u8, AddressingMode, u16)>| {
             for op in ops {
                 lut.insert(op.0, Instruction { mnemonic: ops_str, mode: op.1, cycles: op.2 });
             }

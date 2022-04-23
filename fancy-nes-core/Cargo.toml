@@ -3,6 +3,17 @@ name = "fancy-nes-core"
 version = "0.1.0"
 edition = "2021"
 
+[profile.dev]
+opt-level = 0
+debug = true
+debug-assertions = true
+overflow-checks = true
+lto = false
+panic = "unwind"
+incremental = true
+codegen-units = 256
+rpath = false
+
 [features]
 fceux-log = []  # Enables tracing for FCEUX-style logs
 nestest-log = []  # Enables tracing for PPU-less nestest test ROM

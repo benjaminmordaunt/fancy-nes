@@ -50,12 +50,26 @@
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=nes-platform",
-                    "--package=nes-platform",
                     "--features", "fceux-log"
                 ],
                 "filter": {
-                    "name": "nes-platform",
+                    "name": "fancy-nes",
+                    "kind": "bin"
+                }
+            },
+            "args": ["/Users/benjaminmordaunt/Downloads/mariobros.nes", "-p", "/Users/benjaminmordaunt/Downloads/nespalette.pal"],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug the emulator",
+            "cargo": {
+                "args": [
+                    "build",
+                ],
+                "filter": {
+                    "name": "fancy-nes",
                     "kind": "bin"
                 }
             },

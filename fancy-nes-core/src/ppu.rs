@@ -1,3 +1,7 @@
+/* Copyright (c) 2022 Benjamin John Mordaunt */
+/* See LICENSE */
+
+use std::process::exit;
 use std::{cell::RefCell, rc::Rc};
 
 /// The PPU (picture processing unit) generates 2D graphics and
@@ -84,7 +88,9 @@ pub struct NESPpu<'a> {
     */
     pub palette: [u8; 32],
     vram: [u8; 2048],   /* 2KB of RAM inside the NES dedicated to the PPU     */
-    poam: [u8; 64*4],   /* Primary OAM can be DMA'd using OAMDATA */
+
+    // pOAM public for OAMDMA
+    pub poam: [u8; 64*4],   /* Primary OAM can be DMA'd using OAMDATA */
     soam: [u8; 8*4],    /* CPU can manipulate via memory-mapped DMA registers */
                         /* Secondary OAM - stores 8 sprites for current scanline */
                         
@@ -108,9 +114,10 @@ pub struct NESPpu<'a> {
     ppu_ctrl: PPUCTRL,
     ppu_mask: PPUMASK,
     ppu_status: PPUSTATUS,
+    oam_address: u8,
+    oam_data: u8,
     /* End PPU registers */
 
-    addr_data_bus: u16,  /* The PPU uses the same bus for addr and data to save pins */
     pub tick: u16,           /* The tick on the current scanline (0-indexed) */
 
     bg_pattern_shift_reg_hi: u16,  /* Background pattern table shift registers */
@@ -139,6 +146,7 @@ pub struct NESPpu<'a> {
     poam_sprite_byte_index: usize,
     soam_next_open_slot: usize,
     sprite_evaluation_substage: usize,
+    sprite_evaluation_write_rest: bool,
 
     // PPU sprite rendering
     sprite_render_oam_y_coord: u8,
@@ -175,7 +183,8 @@ impl<'a> NESPpu<'a> {
             ppu_ctrl: PPUCTRL::from_bits_truncate(0x00),
             ppu_mask: PPUMASK::from_bits_truncate(0x00),
             ppu_status: PPUSTATUS::from_bits_truncate(0x00),
-            addr_data_bus: 0,
+            oam_address: 0,
+            oam_data: 0,
             tick: 0,
 
             bg_pattern_shift_reg_lo: 0,
@@ -199,6 +208,7 @@ impl<'a> NESPpu<'a> {
             poam_sprite_byte_index: 0,
             soam_next_open_slot: 0,
             sprite_evaluation_substage: 1,
+            sprite_evaluation_write_rest: false,
 
             sprite_render_oam_y_coord: 0,
             sprite_render_oam_tile_number: 0,
@@ -315,10 +325,14 @@ impl<'a> NESPpu<'a> {
             self.vram_v += increment;
         }
         PPUAddress::OAMADDR => {
-            // TODO
+            // In reality, sprite evaluation starts wherever this is set.
+            // This has implications for alignment enforcements of oam_address.
+            // TODO, have sprite evaluation start from here.
+            self.oam_address = data;
         }
         PPUAddress::OAMDATA => {
-            // TODO
+            self.poam[self.oam_address as usize] = data;
+            self.oam_address += 1;
         }
         _ => { panic!("{:#X}", addr) }
         }
@@ -375,13 +389,25 @@ impl<'a> NESPpu<'a> {
                         self.ppu_status = PPUSTATUS::from_bits_truncate(0);
                     }
 
-                    if matches!(self.tick, 2..=256 | 321..=336) {
+                    if matches!(self.tick, 2..=258 | 321..=336) {
                         if self.ppu_mask.contains(PPUMASK::BACKGROUND) {
                             self.bg_attribute_shift_reg_hi <<= 1;
                             self.bg_attribute_shift_reg_lo <<= 1;
 
                             self.bg_pattern_shift_reg_hi <<= 1;
                             self.bg_pattern_shift_reg_lo <<= 1;
+                        }
+
+                        if self.ppu_mask.contains(PPUMASK::SPRITES) && self.tick < 258 {
+                            for sprite in 0usize..8usize {
+                                if self.sprite_x_position_counter[sprite] > 0 {
+                                    self.sprite_x_position_counter[sprite] -= 1;
+                                }
+                                
+                                // Shift
+                                self.sprite_pattern_shift_reg_hi[sprite] <<= 1;
+                                self.sprite_pattern_shift_reg_lo[sprite] <<= 1;
+                            }
                         }
 
                         match (self.tick - 1) % 8 {
@@ -472,139 +498,191 @@ impl<'a> NESPpu<'a> {
                     }
 
                     // Sprite evaluation and fetching. TODO: Intermingle this with background rendering
-                    match self.tick {
-                        1..=64 => {
-                            // Initialize sOAM with $FF
-                            self.soam[self.tick as usize - 1] = 0xFF;
-                        }
-                        65..=256 => {
-                            if self.tick % 2 == 1 { // Odd cycles - read
-                                match self.sprite_evaluation_substage {
-                                    1 => {
-                                        self.poam_data = self.poam[4*self.poam_sprite_index + self.poam_sprite_byte_index];
-                                    }
-                                    2 => {
-                                        // Increment n is not handled on odd cycles
-                                    }
-                                    // Sprite overflow checks ...
-                                    3 => {
-                                        self.poam_data = self.poam[4*self.poam_sprite_index + self.poam_sprite_byte_index];
-        
-                                        if (self.poam_data..(self.poam_data+8)).contains(&(self.scanline as u8)) {
-                                            self.ppu_status.insert(PPUSTATUS::SPRITE_OVERFLOW);
-                                            self.poam_sprite_byte_index += 1;
-        
-                                            if self.poam_sprite_byte_index >= 4 {
+                    if self.ppu_mask.contains(PPUMASK::RENDERING) {
+                        match self.tick {
+                            1..=32 => {
+                                // Initialize sOAM with $FF
+                                self.soam[self.tick as usize - 1] = 0xFF;
+                            }
+                            65..=256 => {
+                                if self.tick % 2 == 1 { // Odd cycles - read
+                                    match self.sprite_evaluation_substage {
+                                        1 => {
+                                            self.poam_data = self.poam[4*self.poam_sprite_index + self.poam_sprite_byte_index];
+                                        }
+                                        2 => {
+                                            // Increment n is not handled on odd cycles
+                                        }
+                                        // Sprite overflow checks ...
+                                        3 => {
+                                            self.poam_data = self.poam[4*self.poam_sprite_index + self.poam_sprite_byte_index];
+            
+                                            if (self.poam_data..(self.poam_data+8)).contains(&(self.scanline as u8)) {
+                                                self.ppu_status.insert(PPUSTATUS::SPRITE_OVERFLOW);
+                                                self.poam_sprite_byte_index += 1;
+            
+                                                if self.poam_sprite_byte_index >= 4 {
+                                                    self.poam_sprite_index += 1;
+                                                    self.poam_sprite_byte_index = 0;
+                                                }
+                                            } else {
+                                                self.poam_sprite_byte_index += 1;    // Hardware bug
+                                                // Wrap sprite_byte_index, but don't carry into sprite_index
+                                                if self.poam_sprite_byte_index >= 4 {
+                                                    self.poam_sprite_byte_index = 0;
+                                                }
                                                 self.poam_sprite_index += 1;
-                                                self.poam_sprite_byte_index = 0;
+                                                if self.poam_sprite_index >= 64 {
+                                                    self.sprite_evaluation_substage = 4;
+                                                } else {
+                                                    self.poam_sprite_byte_index = 0; // Effectively restart stage 3
+                                                }
                                             }
-                                        } else {
-                                            self.poam_sprite_byte_index += 1;    // Hardware bug
-                                            // Wrap sprite_byte_index, but don't carry into sprite_index
-                                            if self.poam_sprite_byte_index >= 4 {
-                                                self.poam_sprite_byte_index = 0;
+                                        }
+                                        _ => {}
+                                    }
+                                } else { // Even cycles - write
+                                    match self.sprite_evaluation_substage {
+                                        1 => {
+                                            // Are the writing the three other bytes from a hit?
+                                            if self.sprite_evaluation_write_rest {
+                                                self.soam[4*self.soam_next_open_slot + self.poam_sprite_byte_index] = self.poam_data;
+                                                self.poam_sprite_byte_index += 1;
+                                                if self.poam_sprite_byte_index >= 4 {
+                                                    // We're finished here
+                                                    self.sprite_evaluation_write_rest = false;
+                                                    self.poam_sprite_byte_index = 0;
+                                                    self.soam_next_open_slot += 1;
+                                                    self.sprite_evaluation_substage = 2;
+                                                }
+                                            } else {
+                                                if self.soam_next_open_slot <= 7 { // We have sOAM slots available
+                                                    // Use the same byte index as pOAM to determine where in slot to write.
+                                                    self.soam[4*self.soam_next_open_slot + self.poam_sprite_byte_index] = self.poam_data;
+                                                }
+                                                // Check if that y-coordinate is of interest to us
+                                                // In other words, is this scanline in the range [poam_data, poam_data + 8) ?
+                                                if (self.poam_data..(self.poam_data+8)).contains(&(self.scanline as u8)) {
+                                                    self.poam_sprite_byte_index += 1;
+                                                    self.sprite_evaluation_write_rest = true;
+                                                } else {
+                                                    self.poam_sprite_byte_index = 0;
+                                                    self.soam_next_open_slot += 1;
+                                                    self.sprite_evaluation_substage = 2;
+                                                }
                                             }
+                                        }
+                                        2 => {
+                                            // Increment poam_sprite_index
                                             self.poam_sprite_index += 1;
                                             if self.poam_sprite_index >= 64 {
+                                                // Overflow
+                                                // This will go back to zero, meaning that sprite evaluation
+                                                // will continue to try to fit sprite 0 (or first matching sprite)
+                                                // into sOAM, but fail each time (because it is full)
+                                                self.poam_sprite_index = 0; // Overflow
                                                 self.sprite_evaluation_substage = 4;
-                                            } else {
-                                                self.poam_sprite_byte_index = 0; // Effectively restart stage 3
+                                            } else if self.soam_next_open_slot <= 7 {
+                                                self.sprite_evaluation_substage = 1;
+                                            } else if self.soam_next_open_slot == 8 {
+                                                self.sprite_evaluation_substage = 3;
+                                                // You're supposed to disable writes in this case.
+                                                // However, the logic here is such that writes just won't
+                                                // get done anyways.
                                             }
                                         }
+                                        _ => {}
                                     }
-                                    _ => {}
-                                }
-                            } else { // Even cycles - write
-                                match self.sprite_evaluation_substage {
-                                    1 => {
-                                        if self.soam_next_open_slot <= 7 { // We have sOAM slots available
-                                            // Use the same byte index as pOAM to determine where in slot to write.
-                                            self.soam[4*self.soam_next_open_slot + self.poam_sprite_byte_index] = self.poam_data;
-                                        }
-                                        // Check if that y-coordinate is of interest to us
-                                        // In order words, is this scanline in the range [poam_data, poam_data + 8) ?
-                                        if (self.poam_data..(self.poam_data+8)).contains(&(self.scanline as u8)) {
-                                            self.poam_sprite_byte_index += 1;
-                                            if self.poam_sprite_byte_index >= 4 {
-                                                // We've finished here
-                                                self.sprite_evaluation_substage = 2;
-                                                self.poam_sprite_byte_index = 0;
-                                            }
-                                        } else {
-                                            self.sprite_evaluation_substage = 2;
-                                        }
-                                    }
-                                    2 => {
-                                        // Increment poam_sprite_index
-                                        self.poam_sprite_index += 1;
-                                        if self.poam_sprite_index >= 64 {
-                                            // Overflow
-                                            // This will go back to zero, meaning that sprite evaluation
-                                            // will continue to try to fit sprite 0 (or first matching sprite)
-                                            // into sOAM, but fail each time (because it is full)
-                                            self.poam_sprite_index = 0; // Overflow
-                                            self.sprite_evaluation_substage = 4;
-                                        } else if self.soam_next_open_slot <= 7 {
-                                            self.sprite_evaluation_substage = 1;
-                                        } else if self.soam_next_open_slot == 8 {
-                                            // You're supposed to disable writes in this case.
-                                            // However, the logic here is such that writes just won't
-                                            // get done anyways.
-                                        }
-                                    }
-                                    _ => {}
                                 }
                             }
-                        }
-                        257..=320 => { // Fetch tile data for sprites on the next scanline
-                            // For each sprite... (8 sprites, 8 cycles per sprite = 64 cycles)
-                            // ... read data from sOAM for the first four cycles.
-                            //     (the PPU is doing garbage fetches to the nametables during this time TODO)
-                            // ... fetch pattern table tile lo and hi in last four cycles.
-                            //     (remembering classic read-write cadence)
-                            let soam_sprite_index: usize = (((self.tick - 1) & 0x38) >> 3) as usize;
-                            match (self.tick - 1) % 8 {
-                                0 => { // First tick of 1st garbage nametable byte
-                                    // (Emulation cheat)
-                                    // Just load all information about current sprite.
-                                    // NESDEV is once again questionable here...
-                                    // ... PPU_sprite_evaluation states that reads are done to "Y-coordinate, tile number, ..."
-                                    // ... etc. during cycles 1-4. But that ordering must be incorrect as
-                                    // ... PPU_rendering states that X-positions and attributes are latched starting
-                                    // ... tick 2 (tick 0 of 2nd garbage nametable byte). That would mean those pieces of
-                                    // ... data are written before having even been loaded... ?
-                                    // ... My guess here is that the sprite data from sOAM is read backwards.
-                                    // ... ... which seems wrong.
+                            257..=320 => { 
+                                // First, use this opportunity to reset the state
+                                // of the sprite evaluation phase
+                                if self.tick == 257 {
+                                    self.sprite_evaluation_substage = 1;
+                                    self.soam_next_open_slot = 0;
+                                    self.poam_sprite_index = 0;
+                                    self.poam_sprite_byte_index = 0;
+                                }
 
-                                    // Try to avoid this ambiguity by just loading everything in one go here.
-                                    self.sprite_render_oam_y_coord = self.soam[soam_sprite_index * 4+ 0];
-                                    self.sprite_render_oam_tile_number = self.soam[soam_sprite_index * 4 + 1];
-                                    self.sprite_render_oam_attribute = self.soam[soam_sprite_index * 4 + 2];
-                                    self.sprite_render_oam_x_coord = self.soam[soam_sprite_index * 4 + 3];
+                                // Fetch tile data for sprites on the next scanline
+                                // For each sprite... (8 sprites, 8 cycles per sprite = 64 cycles)
+                                // ... read data from sOAM for the first four cycles.
+                                //     (the PPU is doing garbage fetches to the nametables during this time TODO)
+                                // ... fetch pattern table tile lo and hi in last four cycles.
+                                //     (remembering classic read-write cadence)
+                                let soam_sprite_index: usize = (((self.tick - 1) & 0x38) >> 3) as usize;
+                                match (self.tick - 1) % 8 {
+                                    0 => { // First tick of 1st garbage nametable byte
+                                        // (Emulation cheat)
+                                        // Just load all information about current sprite.
+                                        // NESDEV is once again questionable here...
+                                        // ... PPU_sprite_evaluation states that reads are done to "Y-coordinate, tile number, ..."
+                                        // ... etc. during cycles 1-4. But that ordering must be incorrect as
+                                        // ... PPU_rendering states that X-positions and attributes are latched starting
+                                        // ... tick 2 (tick 0 of 2nd garbage nametable byte). That would mean those pieces of
+                                        // ... data are written before having even been loaded... ?
+                                        // ... My guess here is that the sprite data from sOAM is read backwards.
+                                        // ... ... which seems wrong.
+
+                                        // Try to avoid this ambiguity by just loading everything in one go here.
+                                        self.sprite_render_oam_y_coord = self.soam[soam_sprite_index * 4 + 0];
+                                        self.sprite_render_oam_tile_number = self.soam[soam_sprite_index * 4 + 1];
+                                        self.sprite_render_oam_attribute = self.soam[soam_sprite_index * 4 + 2];
+                                        self.sprite_render_oam_x_coord = self.soam[soam_sprite_index * 4 + 3];
+                                    }
+                                    2 => { // First tick of 2nd garbage nametable byte
+                                        // See moan above. Write attribute byte to latch
+                                        self.sprite_attribute_latch[soam_sprite_index] = self.sprite_render_oam_attribute;
+                                    }
+                                    3 => { // Second tick of 2nd garbage nametable byte
+                                        self.sprite_x_position_counter[soam_sprite_index] = self.sprite_render_oam_x_coord;
+                                    }
+                                    4 => {
+                                        // fine-y in sprites depends on the flip attribute of this sprite
+                                        let fine_y = if self.sprite_render_oam_attribute & (1 << 7) > 0 {
+                                            (self.scanline - self.sprite_render_oam_y_coord as u16) & 0x7}
+                                            else {(7 - (self.scanline - self.sprite_render_oam_y_coord as u16)) & 0x7};
+
+                                        self.sprite_pattern_shift_reg_hi[soam_sprite_index] = self.read(
+                                            (self.ppu_ctrl.contains(PPUCTRL::SPRITE_TABLE_ADDR) as u16) << 12
+                                        |   (self.sprite_render_oam_tile_number as u16) << 4
+                                        |   fine_y);
+
+                                        // If the sprite is flipped horizontally, we need to invert the order of bits
+                                        if self.sprite_render_oam_attribute & (1 << 6) > 0 {
+                                            let mut t = self.sprite_pattern_shift_reg_hi[soam_sprite_index];
+                                            t = (t & 0xF0) >> 4 | (t & 0x0F) << 4;
+                                            t = (t & 0xCC) >> 2 | (t & 0x33) << 2;
+                                            t = (t & 0xAA) >> 1 | (t & 0x55) << 1;
+                                            self.sprite_pattern_shift_reg_hi[soam_sprite_index] = t;
+                                        }
+                                    }
+                                    6 => {
+                                        // fine-y in sprites depends on the flip attribute of this sprite
+                                        let fine_y = if self.sprite_render_oam_attribute & (1 << 7) > 0 {
+                                            (self.scanline - self.sprite_render_oam_y_coord as u16) & 0x7}
+                                            else {(7 - (self.scanline - self.sprite_render_oam_y_coord as u16)) & 0x7};
+
+                                        self.sprite_pattern_shift_reg_lo[soam_sprite_index] = self.read(
+                                            (self.ppu_ctrl.contains(PPUCTRL::SPRITE_TABLE_ADDR) as u16) << 12
+                                        |   (self.sprite_render_oam_tile_number as u16) << 4
+                                        |   (fine_y + 8));
+
+                                        // If the sprite is flipped horizontally, we need to invert the order of bits
+                                        if self.sprite_render_oam_attribute & (1 << 6) > 0 {
+                                            let mut t = self.sprite_pattern_shift_reg_lo[soam_sprite_index];
+                                            t = (t & 0xF0) >> 4 | (t & 0x0F) << 4;
+                                            t = (t & 0xCC) >> 2 | (t & 0x33) << 2;
+                                            t = (t & 0xAA) >> 1 | (t & 0x55) << 1;
+                                            self.sprite_pattern_shift_reg_lo[soam_sprite_index] = t;
+                                        }
+                                    }
+                                    _ => { }
                                 }
-                                2 => { // First tick of 2nd garbage nametable byte
-                                    // See moan above. Write attribute byte to latch
-                                    self.sprite_attribute_latch[soam_sprite_index] = self.sprite_render_oam_attribute;
-                                }
-                                3 => { // Second tick of 2nd garbage nametable byte
-                                    self.sprite_x_position_counter[soam_sprite_index] = self.sprite_render_oam_x_coord;
-                                }
-                                4 => {
-                                    self.bg_pattern_next_lo = self.read(
-                                        (self.ppu_ctrl.contains(PPUCTRL::SPRITE_TABLE_ADDR) as u16) << 12
-                                    |   (self.sprite_render_oam_tile_number as u16) << 4
-                                    |   ((self.vram_v & 0x7000) >> 12));
-                                }
-                                6 => {
-                                    self.bg_pattern_next_lo = self.read(
-                                        (self.ppu_ctrl.contains(PPUCTRL::SPRITE_TABLE_ADDR) as u16) << 12
-                                    |   (self.sprite_render_oam_tile_number as u16) << 4
-                                    |   ((self.vram_v & 0x7000) >> 12) + 8);
-                                }
-                                _ => { }
-                            }
-                        }  
-                        _ => { }
+                            }  
+                            _ => { }
+                        }
                     }
                 }
                 241..=260 => {
@@ -620,32 +698,36 @@ impl<'a> NESPpu<'a> {
 
             // SPRITE PIXEL BEGIN
             // Generate a sprite pixel, including transformations from attribute byte
-            let mut sp_pixel: u8 = 0;    /* An index into a palette */
-            let mut sp_palette: u8 = 0;  /* Which palette are we indexing? */
+            let mut sp_pixel: u8 = 0;         /* An index into a palette */
+            let mut sp_palette: u8 = 0;       /* Which palette are we indexing? */
+            let mut sp_latch: u8 = 0;         /* Attibute latch of sprite for live pixel */
+            let mut sp_is_zero: bool = false;
 
             if self.ppu_mask.contains(PPUMASK::SPRITES) {
                 // Decrement all of the sprite x-position counters by 1
+                // Sprites are checked in the order they were placed in OAM
                 for sprite_counter in 0usize..8usize {
-                    match self.sprite_x_position_counter[sprite_counter] {
-                        0 | 1 => { // Is active or will become active
-                            self.sprite_x_position_counter[sprite_counter] = 0;
+                    if self.sprite_x_position_counter[sprite_counter] == 0 { 
+                        // Palette handled quite differently from background
+                        sp_palette = (self.sprite_attribute_latch[sprite_counter] & 0x3) + 4;
+                        
+                        // Also need the accepted sprite's attribute latch so we can determine priority
+                        sp_latch = self.sprite_attribute_latch[sprite_counter];
 
-                            // Retrieve the pattern - easier than bg evaluation because
-                            // we've already done all the heavy lifting
-                            let lbp_pattern = ((self.sprite_pattern_shift_reg_lo[sprite_counter] & 0x80) > 0) as u8;
-                            let hbp_pattern = ((self.sprite_pattern_shift_reg_hi[sprite_counter] & 0x80) > 0) as u8;
-                            
-                            sp_pixel = (hbp_pattern << 1) | lbp_pattern;
+                        // Retrieve the pattern - easier than bg evaluation because
+                        // we've already done all the heavy lifting
+                        let lbp_pattern = ((self.sprite_pattern_shift_reg_lo[sprite_counter] & 0x80) > 0) as u8;
+                        let hbp_pattern = ((self.sprite_pattern_shift_reg_hi[sprite_counter] & 0x80) > 0) as u8;
+                        
+                        sp_pixel = (hbp_pattern << 1) | lbp_pattern;
 
-                            // Palette handled quite differently from background
-                            sp_palette = (self.sprite_attribute_latch[sprite_counter] & 0x3) + 4;
-                        }
-                        _ => {
-                            // Shift
-                            self.sprite_pattern_shift_reg_hi[sprite_counter] <<= 1;
-                            self.sprite_pattern_shift_reg_lo[sprite_counter] <<= 1;
-
-                            self.sprite_x_position_counter[sprite_counter] -= 1;
+                        // If the sprite pixel here is non-zero, break early
+                        if sp_pixel > 0 {
+                            // If this is sprite zero, need to cater for sprite zero hit later on
+                            if sprite_counter == 0 {
+                                sp_is_zero = true;
+                            }
+                            break;
                         }
                     }
                 }
@@ -671,14 +753,39 @@ impl<'a> NESPpu<'a> {
                 bg_palette = (hbp_attribute << 1) | lbp_attribute;
             }
 
+            // BACKGROUND PIXEL END
+            // MUX BEGIN
+            let mut out_pixel: u8 = 0;  /* The value of the pixel ultimately output to the screen */
+            let mut out_palette: u8 = 0;  /* The palette for this pixel */
+
+            // We need to handle both pixel ordering
+            // and sprite zero hits (when rendering falls through to a transparent pixel (sprite 0))
+            
+            // Forceground priority and BG is zero - sprite wins!
+            if sp_pixel != 0 && (sp_latch & (1 << 5) == 0 || bg_pixel == 0) {
+                out_pixel = sp_pixel;
+                out_palette = sp_palette;
+            } else {
+                out_pixel = bg_pixel;
+                out_palette = bg_palette;
+            }
+
+            // Handle sprite zero hit
+            // This occurs when an opaque pixel from sprite 0 overlaps an
+            // opaque pixel of the background
+
+
+            // MUX END
+            // OUTPUT BEGIN
+
             // Read palette RAM to determine which colour code this pixel is
-            let bg_pix_colour = self.read(0x3F00 | ((bg_palette as u16) << 2) | (bg_pixel as u16));
+            let out_pixel_colour = self.read(0x3F00 | ((out_palette as u16) << 2) | (out_pixel as u16));
 
             // Add this colour code to the pixel array, only if we are in the visible region.
             // Note that on a real NES, the first pixel output is not produced until tick = 4
             if self.scanline >= 0 && self.scanline <= 239
                 && self.tick >= 1 && self.tick <= 256 {
-                    self.frame[self.scanline as usize * 256 + (self.tick as usize - 1)] = bg_pix_colour;
+                    self.frame[self.scanline as usize * 256 + (self.tick as usize - 1)] = out_pixel_colour;
             }
 
             self.tick += 1;
@@ -691,11 +798,7 @@ impl<'a> NESPpu<'a> {
                 }
             }
 
-            // BACKGROUND PIXEL END
-            // MUX BEGIN
-
-            
-            // MUX ENF
+            // OUTPUT END
         }
     }
 }
